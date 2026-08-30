@@ -47,6 +47,13 @@ func BaseImageRef() string {
 // directory); returns the context dir.
 func WriteToDisk(root string) (string, error) {
 	dir := filepath.Join(root, "engine")
+	// The walk root "." is skipped below, so the base dir must exist before
+	// the first top-level file (lexically: Dockerfile) tries to land in it —
+	// without this, extraction dies with ENOENT on the Spark (qfn build /
+	// prepare-hybrid).
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", fmt.Errorf("creating %s: %w", dir, err)
+	}
 	err := fs.WalkDir(FS, ".", func(p string, d fs.DirEntry, err error) error {
 		if err != nil || p == "." {
 			return err
