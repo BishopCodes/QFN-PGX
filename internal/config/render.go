@@ -64,6 +64,7 @@ func Render(cfg Config) string {
 	line(&b, "bind", q(cfg.Serve.Bind), "console bind; anything beyond loopback forces auth on")
 	line(&b, "proxy", tf(cfg.Serve.Proxy), "mount /v1/* as the OpenAI-compatible front door on this port")
 	line(&b, "max_prompt_tokens", n(cfg.Serve.MaxPromptTokens), "0 = no ceiling; >0 rejects over-long prompts via a /tokenize pre-check")
+	line(&b, "sampling_defaults", tf(cfg.Serve.SamplingDefaults), "true = proxy fills omitted temperature/top_p/top_k from the checkpoint's generation_config.json")
 	line(&b, "auth_enabled", tf(cfg.Serve.AuthEnabled), "password gate set by `qfn init` (credentials.age); cannot be disabled off-loopback")
 	line(&b, "require_api_key", tf(cfg.Serve.RequireAPIKey), "future: reject cookie-only /v1 calls once named machine keys ship")
 	if len(cfg.Serve.APIKeys) > 0 {

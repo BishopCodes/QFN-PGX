@@ -403,6 +403,8 @@ func configGetPath(cfg config.Config, path string) (string, error) {
 		return s.Bind, nil
 	case "serve.proxy":
 		return fmt.Sprint(s.Proxy), nil
+	case "serve.sampling_defaults":
+		return fmt.Sprint(s.SamplingDefaults), nil
 	case "paths.hf_cache":
 		return cfg.Paths.HFCache, nil
 	case "paths.state_dir":
@@ -457,6 +459,8 @@ func configSetPath(cfg *config.Config, path, val string) error {
 		s.Bind = val
 	case "serve.proxy":
 		return pb(&s.Proxy)
+	case "serve.sampling_defaults":
+		return pb(&s.SamplingDefaults)
 	case "paths.hf_cache":
 		cfg.Paths.HFCache = val
 	case "paths.state_dir":

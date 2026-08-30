@@ -57,6 +57,7 @@ type Serve struct {
 	Proxy           bool     `toml:"proxy"`
 	MaxPromptTokens int      `toml:"max_prompt_tokens"` // 0 = no ceiling
 	AuthEnabled     bool     `toml:"auth_enabled"`      // forced true when Bind != loopback
+	SamplingDefaults bool   `toml:"sampling_defaults"` // fill omitted sampling params from the checkpoint's generation_config.json
 	RequireAPIKey   bool     `toml:"require_api_key"`   // future: reject cookie-only /v1 calls
 	APIKeys         []APIKey `toml:"api_keys"`          // future: named machine keys (schema-ready)
 }
@@ -117,7 +118,8 @@ func Defaults() Config {
 			Proxy:           true,
 			MaxPromptTokens: 0,
 			AuthEnabled:     true,
-			RequireAPIKey:   false,
+			RequireAPIKey:    false,
+			SamplingDefaults: false,
 		},
 		Service: Service{ServeAlwaysOn: true, EngineAutostart: false},
 		Meta:    Meta{},

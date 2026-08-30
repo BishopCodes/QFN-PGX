@@ -39,13 +39,28 @@ requests feed: phase (prefilling/decoding), tokens, tokens/s, TTFT — every
 live request, SSE-abort detection included.
 
 **The front door** — `/v1/*` on 8799 is the only way in (engine lockdown:
-loopback docker bind + a generated API key only `qfn` holds). The proxy
-injects SSE keepalives at event boundaries — no more proxy timeouts mid-decode
-— records usage per request, and cancels upstream GPU work the moment your
+loopback docker bind + a generated API key only `qfn` holds). Two dialects
+speak through it: **OpenAI** (`/v1/chat/completions`, `/v1/completions`) and
+**Anthropic** (`/v1/messages`, translated in-proxy — Messages-format requests,
+tools, tool_results, images, and a proper Anthropic SSE event sequence:
+thinking/text/tool_use content blocks with `input_json_delta` streaming), so
+Claude Code-class agents can point straight at the Spark. The proxy injects
+SSE keepalives at event boundaries — no more proxy timeouts mid-decode —
+records usage per request, and cancels upstream GPU work the moment your
 client hangs up. `qfn chat` goes through it too, so the dashboard sees REPL
 traffic. Machine auth for agents: `qfn lockdown front-key` →
-`Authorization: Bearer …`. Named per-client API keys are schema-ready
+`Authorization: Bearer …`. `serve.sampling_defaults = true` fills omitted
+sampling params from the checkpoint's `generation_config.json` (client-set
+values are never overridden). Named per-client API keys are schema-ready
 (`serve.api_keys`) for when multi-tenant matters.
+
+**`qfn launch`** — one command wires a coding agent to the front door:
+`qfn launch claude|codex|opencode|dsh` (or `generic -- <cmd>`) discovers the
+served model, injects the right env (`ANTHROPIC_BASE_URL`, `OPENAI_BASE_URL`,
+context-window hints) with the front key, and **clears every cloud provider
+key from the child environment** — ANTHROPIC/OPENAI/GEMINI/GROQ/XAI/… — so
+the agent physically cannot fall back to a paid endpoint mid-task. `--dry-run`
+shows the full plan.
 
 **Metrics that aren't lies** — first scrape sets a baseline, rates are
 windowed, histogram quantiles differ cumulative windows (never lifetime
@@ -68,7 +83,8 @@ internal/cli/     cobra commands + the defaults wizard (the heart of init)
 internal/config/  config.toml (+ commented template), profiles overlay, validation
 internal/engine/  serve.sh byte-ported to Go: argv goldens tested; boot-log phase parser
 internal/collector/ host/proc/cgroup/nvidia-smi/vLLM /metrics sampling
-internal/proxy/   SSE keepalive relay, abort propagation, usage registry
+internal/proxy/   SSE keepalive relay, abort propagation, usage registry,
+                  Anthropic ⇄ OpenAI translation
 internal/server/  console HTTP: login/lockout, SSE multiplexer, engine ops
 internal/auth/    age-encrypted credentials, sessions, per-IP lockout
 internal/doctor/  preflight battery + the memory guard (shared by CLI + web)

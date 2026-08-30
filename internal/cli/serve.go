@@ -99,6 +99,13 @@ func runServe(ctx context.Context, app *App, port int, bind string, noProxy bool
 		p.Target = base
 		p.Key = engKey
 		p.MaxPromptTokens = func() int { return live().Serve.MaxPromptTokens }
+		p.Sampling = func() map[string]any {
+			c := live()
+			if !c.Serve.SamplingDefaults {
+				return nil
+			}
+			return engine.GenerationDefaults(config.ExpandHome(c.Paths.HFCache), c.Engine.Model)
+		}
 		proxyHandler = p
 	}
 

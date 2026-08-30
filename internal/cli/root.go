@@ -36,6 +36,7 @@ func RunWithContext(ctx context.Context, build string) int {
 	addServe(root, app)
 	addSetup(root, app)  // init/config/profiles/passwd/lockdown/service
 	addTools(root, app)  // doctor/bench/chat/stats/build/pull/prepare-hybrid
+	addLaunch(root, app) // wire coding agents to the front door
 
 	root.SetContext(ctx)
 	if err := root.ExecuteContext(ctx); err != nil {

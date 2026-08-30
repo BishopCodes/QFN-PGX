@@ -21,6 +21,10 @@ type Proxy struct {
 	Key func() string
 	// MaxPromptTokens returns the prompt ceiling (0 = no ceiling).
 	MaxPromptTokens func() int
+	// Sampling returns checkpoint-recommended sampling defaults to fill into
+	// requests that omit the fields (FreeToken's --sampling-defaults trick);
+	// nil or empty map = feature off.
+	Sampling func() map[string]any
 
 	Registry  *Registry
 	Keepalive time.Duration // SSE injection interval (default 10 s)
@@ -88,6 +92,11 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if isAnthropic(r.URL.Path) {
+		p.serveMessages(w, r, body)
+		return
+	}
+
 	var reqMeta struct {
 		Model  string          `json:"model"`
 		Stream bool            `json:"stream"`
@@ -108,6 +117,8 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+
+	body = p.applySampling(body)
 
 	reqCtx, cancel := context.WithCancel(r.Context())
 	defer cancel()
@@ -398,6 +409,39 @@ func firstNonEmpty(a, b json.RawMessage) json.RawMessage {
 		return a
 	}
 	return b
+}
+
+// applySampling fills omitted sampling params from the checkpoint's
+// generation_config.json recommendations (only when serve.sampling_defaults
+// is on and the endpoint is a generation one). Request fidelity note: fields
+// the client set are never touched; only absent ones are filled.
+func (p *Proxy) applySampling(body []byte) []byte {
+	if p.Sampling == nil || len(body) == 0 || body[0] != '{' {
+		return body
+	}
+	defs := p.Sampling()
+	if len(defs) == 0 {
+		return body
+	}
+	var generic map[string]any
+	if json.Unmarshal(body, &generic) != nil {
+		return body
+	}
+	changed := false
+	for k, v := range defs {
+		if _, present := generic[k]; !present {
+			generic[k] = v
+			changed = true
+		}
+	}
+	if !changed {
+		return body
+	}
+	out, err := json.Marshal(generic)
+	if err != nil {
+		return body
+	}
+	return out
 }
 
 func (p *Proxy) keepalive() time.Duration {
