@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>QFN-PGX · Qwen3.8-Flash-Next on one Spark</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="login" class="login hidden">
+  <form id="login-form" class="card">
+    <h1>QFN-PGX</h1>
+    <p class="sub">Qwen3.8-Flash-Next · one DGX Spark</p>
+    <input id="pw" type="password" placeholder="console password" autocomplete="current-password" autofocus>
+    <button type="submit">Unlock</button>
+    <div id="login-err" class="err"></div>
+  </form>
+</div>
+
+<main id="app" class="hidden">
+  <header>
+    <div class="brand">QFN&#8209;PGX</div>
+    <div id="banner" class="banner"></div>
+    <div class="hright">
+      <span id="clock" class="dim"></span>
+      <button id="logout" class="ghost">sign out</button>
+    </div>
+  </header>
+
+  <section id="controls" class="controls">
+    <div id="engine-state" class="pill">…</div>
+    <select id="profile" title="launch profile"></select>
+    <button id="btn-up">▲ start engine</button>
+    <button id="btn-restart">⟳ restart</button>
+    <button id="btn-down" class="danger">■ stop</button>
+    <span id="op-status" class="dim"></span>
+  </section>
+
+  <section class="grid">
+    <div class="panel" id="p-model">
+      <h2>model</h2>
+      <div id="model-body" class="kv">…</div>
+    </div>
+    <div class="panel" id="p-perf">
+      <h2>performance</h2>
+      <div id="perf-body" class="kv">…</div>
+      <canvas id="perf-canvas" width="560" height="88"></canvas>
+    </div>
+    <div class="panel" id="p-requests">
+      <h2>requests</h2>
+      <div class="counts"><span id="req-counts">…</span></div>
+      <div id="req-table" class="tbl"></div>
+    </div>
+    <div class="panel" id="p-system">
+      <h2>system <span class="dim">· unified pool</span></h2>
+      <div class="bar-label">memory</div><div class="bar"><div id="bar-mem"></div></div>
+      <div class="bar-label">swap</div><div class="bar swap"><div id="bar-swap"></div></div>
+      <div id="psi" class="psi"></div>
+      <div class="bar-label">cpus</div>
+      <div id="cores" class="cores"></div>
+      <div id="sys-kv" class="kv">…</div>
+    </div>
+    <div class="panel wide" id="p-logs">
+      <h2>engine log <span class="dim">· boot progress</span></h2>
+      <pre id="logs"></pre>
+    </div>
+  </section>
+</main>
+
+<script src="/login.js" defer></script>
+<script src="/app.js" defer></script>
+</body>
+</html>
