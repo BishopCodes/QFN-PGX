@@ -5,10 +5,15 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X $(MODULE)/internal/cli.version=$(VERSION)
 GOENV   := CGO_ENABLED=0
 
-.PHONY: build test vet race arm64 deploy clean fmt
+.PHONY: build install test vet race arm64 deploy clean fmt
 
 build:
 	$(GOENV) go build -trimpath -ldflags '$(LDFLAGS)' -o $(BIN) ./cmd/qfn
+
+# put qfn on PATH (default /usr/local/bin needs sudo; no sudo? PREFIX=~/.local/bin)
+PREFIX ?= /usr/local/bin
+install: build
+	install -Dm0755 $(BIN) $(DESTDIR)$(PREFIX)/qfn
 
 test:
 	go test ./...

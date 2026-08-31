@@ -107,11 +107,15 @@ is a plain-HTTP LAN tool by design: the recommended remote view is
 ## Build
 
 ```
-make build     # host binary
+make build     # host binary → ./bin/qfn
+make install   # …and put it on PATH (sudo needed for /usr/local/bin; or PREFIX=~/.local/bin)
 make arm64     # CGO_ENABLED=0 static aarch64 — this is what runs on the Spark
 make test      # go test ./...
 make deploy SPARK=bishop@10.0.1.42   # scp + swap the binary
 ```
+
+On the Spark itself, a plain flow is: `git clone … && cd QFN-PGX && make build && sudo make install`
+— `make build` alone only leaves the binary at `./bin/qfn` (that tripped the first `command not found`).
 
 Upstream sync: `engine/` files stay byte-verbatim (re-sync recipe in
 `engine/ATTRIBUTION.md`); every deliberate launch deviation (loopback bind,
