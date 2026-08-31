@@ -419,7 +419,7 @@ func (s *Server) hEngineStatus(w http.ResponseWriter, r *http.Request) {
 			"phase": "down", "reachable": s.deps.Collector.Last() != nil && s.deps.Collector.Last().Engine.Reachable})
 		return
 	}
-	phase := "created"
+	phase := "starting"
 	detail := ""
 	if st.Running {
 		bt := &engine.BootTracker{}

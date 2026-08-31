@@ -13,6 +13,7 @@ import (
 	"bufio"
 	"context"
 	"io"
+	"os/exec"
 	"regexp"
 	"strconv"
 	"sync"
@@ -22,11 +23,16 @@ import (
 )
 
 const (
-	ringLines  = 800   // replay ceiling per reconnect
-	subBuf     = 256   // per-subscriber backlog before we drop + resync
+	ringLines  = 800 // replay ceiling per reconnect
+	subBuf     = 256 // per-subscriber backlog before we drop + resync
 	pumpIdle   = 2 * time.Second
+	lifeTick   = 30 * time.Second // watchdog if the docker event stream dies
 	statusTick = 5 * time.Second
 )
+
+// ansi matches terminal color/escape sequences; docker logs preserves them,
+// and they render as mojibake in the browser (and poison log regexes).
+var ansiRE = regexp.MustCompile("\x1b\\[[0-9;]*[A-Za-z]|\x1b\\][^\x07]*\x07")
 
 // Status is the push-side engine story: phase + percent + ETA.
 type Status struct {
@@ -72,13 +78,17 @@ func (b *logBus) start(ctx context.Context) {
 }
 
 func (b *logBus) run(ctx context.Context) {
+	// Engine lifecycle arrives over the docker events socket instead of a
+	// 2 s inspect poll; a 30 s inspect is only a watchdog against missed
+	// events. While up, the log pipe itself signals death — no polling.
+	trans := b.watchLifecycle(ctx)
 	for ctx.Err() == nil {
 		name := b.nameFn()
 		st, err := b.inspect(ctx, name)
 		up := err == nil && st.Running
 		b.setRunning(up)
 		if !up {
-			if !sleepCtx(ctx, pumpIdle) {
+			if !waitEvent(ctx, trans, lifeTick) {
 				return
 			}
 			continue
@@ -90,7 +100,7 @@ func (b *logBus) run(ctx context.Context) {
 		sc := bufio.NewScanner(pr)
 		sc.Buffer(make([]byte, 0, 64*1024), 512*1024)
 		for sc.Scan() {
-			line := sc.Text()
+			line := ansiRE.ReplaceAllString(sc.Text(), "")
 			ph, det := bt.Feed(line)
 			b.publish(line, bt, ph, det)
 			if ph == engine.PhaseFailed {
@@ -101,10 +111,57 @@ func (b *logBus) run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if !sleepCtx(ctx, time.Second) {
+		if !waitEvent(ctx, trans, pumpIdle) {
 			return
 		}
 	}
+}
+
+// waitEvent sleeps until the docker-event channel pings, the watchdog fires,
+// or ctx dies (false).
+func waitEvent(ctx context.Context, ch <-chan struct{}, max time.Duration) bool {
+	t := time.NewTimer(max)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-ch:
+		return true
+	case <-t.C:
+		return true
+	}
+}
+
+// watchLifecycle keeps one `docker events` stream open for the container and
+// pings ch on start/stop/kill/die. If the stream can't stay up (older
+// docker, perms), we simply fall back to the watchdog cadence.
+func (b *logBus) watchLifecycle(ctx context.Context) <-chan struct{} {
+	ch := make(chan struct{}, 1)
+	go func() {
+		for ctx.Err() == nil {
+			cmd := exec.CommandContext(ctx, "docker", "events",
+				"--filter", "container="+b.nameFn(),
+				"--filter", "event=start", "--filter", "event=die",
+				"--filter", "event=kill", "--filter", "event=stop")
+			out, err := cmd.StdoutPipe()
+			if err == nil {
+				if err = cmd.Start(); err == nil {
+					sc := bufio.NewScanner(out)
+					for sc.Scan() {
+						select {
+						case ch <- struct{}{}:
+						default:
+						}
+					}
+					_ = cmd.Wait()
+				}
+			}
+			if !sleepCtx(ctx, 2*time.Second) {
+				return
+			}
+		}
+	}()
+	return ch
 }
 
 // publish broadcasts a line and recomputes the status model.
@@ -163,7 +220,7 @@ func (b *logBus) setRunning(up bool) {
 	if up && !b.st.Running {
 		// Fresh container run: reset the boot story so percentages start
 		// from this stream, not the previous one.
-		b.st = Status{Running: true, Phase: "created", Pct: 3,
+		b.st = Status{Running: true, Phase: "starting", Pct: 3,
 			StartedAt: float64(time.Now().UnixMilli()) / 1000}
 	} else if !up && b.st.Phase != "down" {
 		b.st = Status{Phase: "down"}

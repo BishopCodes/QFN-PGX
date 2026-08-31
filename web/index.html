@@ -58,25 +58,26 @@
     <!-- PERFORMANCE -->
     <section class="panel col-span-12 lg:col-span-8 xl:col-span-5">
       <div class="ptitle">Performance <button class="help" data-help="perf">?</button></div>
-      <div class="grid grid-cols-4 gap-3 mb-2">
-        <div><div class="text-slate-500 text-[11px]">decode</div><div id="kv-gen" class="font-mono text-lg text-good">—</div><div class="text-[10px] text-slate-600">tok/s out</div></div>
-        <div><div class="text-slate-500 text-[11px]">prefill</div><div id="kv-prefill" class="font-mono text-lg text-accent">—</div><div class="text-[10px] text-slate-600">tok/s in</div></div>
-        <div><div class="text-slate-500 text-[11px]">KV cache</div><div id="kv-usage" class="font-mono text-lg text-warn">—</div><div class="text-[10px] text-slate-600">% of pool</div></div>
-        <div><div class="text-slate-500 text-[11px]">prefix hit</div><div id="kv-prefix" class="font-mono text-lg text-slate-200">—</div><div class="text-[10px] text-slate-600">reuse window</div></div>
+      <div class="grid grid-cols-2 sm:grid-cols-5 gap-x-3 gap-y-1 mb-1">
+        <div><div class="text-slate-500 text-[11px]">generation</div><div class="font-mono text-lg text-good leading-tight"><span id="kv-gen">—</span> <span class="text-[10px] text-slate-600">tok/s</span></div></div>
+        <div><div class="text-slate-500 text-[11px]">avg speed <span class="text-slate-700">5m</span></div><div class="font-mono text-lg text-good leading-tight"><span id="kv-gen-avg">—</span> <span class="text-[10px] text-slate-600">tok/s</span></div></div>
+        <div><div class="text-slate-500 text-[11px]">prefill</div><div class="font-mono text-lg text-accent leading-tight"><span id="kv-prefill">—</span> <span class="text-[10px] text-slate-600">tok/s</span></div></div>
+        <div><div class="text-slate-500 text-[11px]">KV cache</div><div class="font-mono text-lg text-warn leading-tight"><span id="kv-usage">—</span> <span class="text-[10px] text-slate-600">%</span></div></div>
+        <div><div class="text-slate-500 text-[11px]">prefix cache hit</div><div class="font-mono text-lg text-slate-200 leading-tight"><span id="kv-prefix">—</span> <span class="text-[10px] text-slate-600">%</span></div></div>
       </div>
       <div id="chart-perf" data-help="chart"></div>
-      <div id="perf-extra" class="grid grid-cols-2 gap-x-6 mt-1"></div>
+      <div id="perf-extra" class="grid grid-cols-2 gap-x-4 mt-2 text-xs leading-[1.7]"></div>
     </section>
 
     <!-- SYSTEM -->
     <section class="panel col-span-12 lg:col-span-6 xl:col-span-4">
-      <div class="ptitle">System — 128 GB unified pool <button class="help" data-help="system">?</button></div>
+      <div class="ptitle">System — 128 GB unified memory <button class="help" data-help="system">?</button></div>
       <div class="mb-2">
         <div class="flex justify-between text-xs mb-0.5"><span class="text-slate-500">memory</span><span id="mem-text" class="font-mono">— of —</span></div>
         <div class="meter"><i id="bar-mem"></i></div>
       </div>
       <div class="mb-2">
-        <div class="flex justify-between text-xs mb-0.5"><span class="text-slate-500">swap <span class="text-[10px] text-slate-600">(the number that ruins your day)</span></span><span id="swap-text" class="font-mono">— of —</span></div>
+        <div class="flex justify-between text-xs mb-0.5"><span class="text-slate-500">swap</span><span id="swap-text" class="font-mono">— of —</span></div>
         <div class="meter"><i id="bar-swap" style="background:#f0b429"></i></div>
       </div>
       <div class="flex items-center gap-2 mb-2">
@@ -95,8 +96,8 @@
       <table class="w-full table-fixed text-xs">
         <thead><tr class="text-left text-slate-500 border-b border-edge">
           <th class="w-10 py-1 font-normal">#</th><th class="w-24 font-normal">phase</th>
-          <th class="w-14 font-normal">kind</th><th class="w-16 text-right font-normal">out</th>
-          <th class="w-16 text-right font-normal">in</th><th class="w-20 text-right font-normal">tok/s</th>
+          <th class="w-14 font-normal">kind</th><th class="w-16 text-right font-normal">in</th>
+          <th class="w-16 text-right font-normal">out</th><th class="w-20 text-right font-normal">speed</th>
           <th class="font-normal">model · client</th>
         </tr></thead>
         <tbody id="req-table"></tbody>
@@ -115,17 +116,23 @@
       <button id="btn-jump" class="btn hidden self-end mt-1">jump to latest ↓</button>
     </section>
 
-    <!-- PLAYGROUND -->
-    <section class="panel col-span-12" id="playground">
-      <div class="ptitle">Playground — test the model with different settings <button class="help" data-help="playground">?</button></div>
-      <div class="grid grid-cols-12 gap-4">
-        <div class="col-span-12 lg:col-span-4 flex flex-col gap-2">
+  </main>
+</div>
+
+
+<!-- PLAYGROUND DRAWER -->
+<aside id="pg-drawer" class="hidden fixed top-0 right-0 h-full w-full sm:w-[560px] z-40 bg-panel border-l border-edge shadow-[0_0_60px_#000a] flex flex-col">
+  <div class="ptitle border-b border-edge !px-4 !py-2.5">Playground <button class="help" data-help="playground">?</button><span class="flex-1"></span>
+    <span class="text-[10px] text-slate-600 normal-case tracking-normal mr-2">chat with live settings</span>
+    <button id="btn-pg-close" class="btn !py-0">esc</button></div>
+  <div class="flex-1 overflow-y-auto px-4 py-3 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3 content-start">
+        <div class="sm:col-span-2 flex flex-col gap-2 border-b border-edge pb-3">
           <label class="text-xs text-slate-500">preset
             <select id="pg-preset" class="btn block w-full mt-1">
               <option value="defaults">engine defaults (from checkpoint)</option>
               <option value="deterministic">deterministic (temp 0)</option>
               <option value="creative">creative (temp 1.0, top_p 0.95)</option>
-              <option value="fast">fast draft (max 64, no thinking)</option>
+              <option value="fast">fast draft (max 64, no reasoning)</option>
             </select>
           </label>
           <label class="text-xs text-slate-500">system prompt
@@ -143,8 +150,8 @@
             </label>
           </div>
           <label class="flex items-center gap-2 text-xs text-slate-500">
-            <input id="pg-think" type="checkbox" checked class="accent-[#4cc2ff]"> thinking mode
-            <span class="text-slate-600">(reasons before answering — slower, better)</span>
+            <input id="pg-think" type="checkbox" checked class="accent-[#4cc2ff]"> reasoning mode
+            <span class="text-slate-600">— increases latency</span>
           </label>
           <div class="flex gap-2 mt-1">
             <button id="btn-send" class="btn flex-1">Send ▸</button>
@@ -152,16 +159,14 @@
             <button id="pg-clear" class="btn">clear</button>
           </div>
         </div>
-        <div class="col-span-12 lg:col-span-8 flex flex-col min-w-0">
+        <div class="col-span-full flex flex-col min-w-0">
           <textarea id="pg-msg" rows="3" placeholder="Ask the model anything… (Ctrl+Enter sends)"
             class="w-full bg-ink border border-edge rounded px-2 py-1.5 text-slate-200 focus:border-accent outline-none resize-y"></textarea>
           <pre id="pg-out" class="flex-1 min-h-[160px] max-h-[50vh] overflow-y-auto mt-2 bg-ink/60 rounded p-2 font-mono text-xs whitespace-pre-wrap break-words text-slate-300"></pre>
           <div id="pg-stats" class="text-[11px] text-slate-500 mt-1 font-mono"></div>
         </div>
       </div>
-    </section>
-  </main>
-</div>
+</aside>
 
 <div id="req-modal" class="hidden fixed inset-0 bg-ink/80 z-50 grid place-items-center">
   <div class="panel w-[480px] max-w-[92vw]">

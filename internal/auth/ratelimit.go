@@ -20,7 +20,7 @@ const (
 )
 
 type ipState struct {
-	Attempts     int       // failures in current window
+	Attempts     int // failures in current window
 	WindowStart  time.Time
 	Streak       int // consecutive lockouts (drives the exponent)
 	BlockedUntil time.Time

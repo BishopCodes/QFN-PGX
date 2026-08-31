@@ -21,7 +21,7 @@ const (
 func (p Phase) String() string {
 	switch p {
 	case PhaseCreated:
-		return "created"
+		return "starting"
 	case PhaseWeights:
 		return "loading weights"
 	case PhaseGraphs:

@@ -64,6 +64,7 @@ type EngineState struct {
 	ITLP90         float64  `json:"itl_p90"`
 	E2EP50         float64  `json:"e2e_p50"`
 	TTFTSamples    int      `json:"ttft_samples"` // window bucket total (0 = idle)
+	Spec           SpecStats `json:"spec"`        // MTP speculative decoding
 }
 
 // Config points the collector at things.
@@ -102,6 +103,8 @@ type Collector struct {
 	prevStat   cpuTimes
 	prevCores  []cpuTimes
 	prevEng    engPrev
+	metTick    int // scrape clock for the dead-engine backoff
+	metFail    int
 	prevCG     cgPrev
 	prevAt     time.Time
 	gpuCached  GPU
@@ -114,8 +117,20 @@ type Collector struct {
 
 type vmPrev struct{ pswpin, pswpout, majfault uint64 }
 type engPrev struct {
-	prompt, generation, prefixQ, prefixH float64
-	seen                                       bool
+	prompt, generation, prefixQ, prefixH    float64
+	specAcc, specDraftTok, specDrafts            float64
+	specSeen, seen                               bool
+}
+
+// SpecStats makes MTP speculative decoding observable: how often drafts are
+// accepted and what they contribute — the numbers behind "is MTP earning its
+// memory", straight from the /metrics counters.
+type SpecStats struct {
+	Active       bool    `json:"active"`
+	AcceptancePct float64 `json:"acceptance_pct"` // accepted / drafted tokens
+	AcceptedPerS float64  `json:"accepted_per_s"` // tokens/s of free output
+	DraftedPerS  float64  `json:"drafted_per_s"`
+	MeanTokens   float64  `json:"mean_accepted"`  // accepted tokens per draft step
 }
 type cgPrev struct {
 	cpuUsec, readBytes, writeBytes uint64
@@ -331,17 +346,26 @@ func (c *Collector) SampleOnce(ctx context.Context) Snapshot {
 	}
 
 	// --- engine ---
+	// When the engine is down there is nobody to ask — degrade the /metrics
+	// scrape to every 5th tick (10 s) instead of hammering a dead port every
+	// 2 s. /proc reads stay live because the box is always answering those.
 	if base := cfgStr(c.cfg.EngineBase); base != "" {
-		text, err := c.io.Scrape(ctx, strings.TrimRight(base, "/")+"/metrics", cfgStr(c.cfg.EngineKey))
+		c.metTick++
+		if c.metFail >= 3 && c.metTick%5 != 0 {
+			snap.Engine.Reachable = false
+		} else if text, err := c.io.Scrape(ctx, strings.TrimRight(base, "/")+"/metrics", cfgStr(c.cfg.EngineKey)); true {
 		if err == nil {
+			c.metFail = 0
 			m, perr := ParseMetricsText(text)
 			if perr == nil {
 				c.fillEngine(&snap, m, dt)
 			}
 		} else {
+			c.metFail++
 			// engine down/loading: reset windows so rates restart clean
 			c.prevEng = engPrev{}
 			snap.Engine.Reachable = false
+		}
 		}
 	}
 
@@ -371,7 +395,26 @@ func (c *Collector) fillEngine(snap *Snapshot, m Metrics, dt float64) {
 			e.PrefixHitRatio = dh / dq
 		}
 	}
-	c.prevEng = engPrev{prompt, generation, pq, ph, true}
+	// --- speculative decoding (MTP) counters ---
+	sAcc, aOK := m.Gauge("vllm:spec_decode_num_accepted_tokens_total")
+	sDrT, dtOK := m.Gauge("vllm:spec_decode_num_draft_tokens_total")
+	sDr, dOK := m.Gauge("vllm:spec_decode_num_drafts_total")
+	e.Spec = SpecStats{}
+	if aOK && dtOK && dOK && dt > 0 && c.prevEng.seen && c.prevEng.specSeen {
+		ra := rate(sAcc, c.prevEng.specAcc, dt)
+		rdt := rate(sDrT, c.prevEng.specDraftTok, dt)
+		rd := rate(sDr, c.prevEng.specDrafts, dt)
+		if rdt > 0 || ra > 0 {
+			e.Spec = SpecStats{Active: true, AcceptedPerS: ra, DraftedPerS: rdt}
+			if rdt > 0 {
+				e.Spec.AcceptancePct = 100 * ra / rdt
+			}
+			if rd > 0 {
+				e.Spec.MeanTokens = ra / rd
+			}
+		}
+	}
+	c.prevEng = engPrev{prompt, generation, pq, ph, sAcc, sDrT, sDr, true, true}
 	if q, ok := c.hist.Quantile(m, "vllm:time_to_first_token_seconds", 0.5); ok {
 		e.TTFTP50 = q
 	}

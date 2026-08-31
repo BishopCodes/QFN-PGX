@@ -46,10 +46,18 @@ function connectLogs() {
   logSource.onerror = () => { $('op-status').textContent = 'log stream reconnecting…'; };
 }
 
+function logColor(l) {
+  const t = esc(l);
+  if (/ERROR|Traceback|out of memory|CUDA error|failed/i.test(l)) return `<span class="text-bad">${t}</span>`;
+  if (/\bWARN(ING)?\b/i.test(l)) return `<span class="text-warn">${t}</span>`;
+  if (/\bDEBUG\b/.test(l)) return `<span class="text-slate-600">${t}</span>`;
+  // INFO-shape: dim the timestamp and the level word, keep the payload readable
+  return t.replace(/^(.{10,40}?\d{2}:\d{2}:\d{2}[^\s]*\s)/, '<span class="text-slate-600">$1</span>')
+          .replace(/\bINFO\b/, '<span class="text-slate-500">INFO</span>');
+}
 function renderLogs(force) {
   logsEl.innerHTML = logs.map((l) =>
-    /error|traceback|failed|out of memory/i.test(l) ? `<span class="log-err">${esc(l)}</span>\n`
-    : /^\s*$/.test(l) ? '' : `${esc(l)}\n`).join('');
+    /^\s*$/.test(l) ? '' : `${logColor(l)}\n`).join('');
   if (following || force) jump();
 }
 function jump() { logsEl.scrollTop = logsEl.scrollHeight; }
@@ -86,14 +94,22 @@ function paintSnapshot(snap) {
   state.snapshot = snap;
   const h = snap.host || {}, e = snap.engine || {}, g = snap.gpu || {}, c = snap.container;
 
-  // backpressure banner (the ONE health verdict — explained in help)
+  // pressure banner — NAME the dominant factor; the word "backpressure" is
+  // reserved for when requests are actually being delayed by it.
   const p = $('pill-pressure');
   const swapPct = h.swap_total_kib ? (h.swap_used_kib / h.swap_total_kib) * 100 : 0;
   const psiIo = h.psi?.io?.full_avg10 ?? 0, psiMem = h.psi?.memory?.some_avg10 ?? 0;
-  if (e.reachable && e.kv_usage_pct > 90 || psiIo > 10) {
-    p.className = 'pill pill-bad'; p.textContent = `backpressure · kv ${fmtNum(e.kv_usage_pct, 0)}% io ${fmtNum(psiIo, 0)}`;
-  } else if (swapPct > 25 || psiMem > 5) {
-    p.className = 'pill pill-boot'; p.textContent = `pressure · swap ${fmtNum(swapPct, 0)}%`;
+  const factors = [];
+  if (psiIo > 5) factors.push([psiIo, `io ${fmtNum(psiIo, 0)}`]);
+  if (e.kv_usage_pct > 85) factors.push([e.kv_usage_pct / 10, `kv ${fmtNum(e.kv_usage_pct, 0)}%`]);
+  if (swapPct > 20) factors.push([swapPct / 10, `swap ${fmtNum(swapPct, 0)}%`]);
+  if (psiMem > 4) factors.push([psiMem, `mem ${fmtNum(psiMem, 0)}`]);
+  factors.sort((a, b) => b[0] - a[0]);
+  const delayed = (e.waiting ?? 0) > 0 || (e.swapped ?? 0) > 0;
+  if (factors.length && delayed) {
+    p.className = 'pill pill-bad'; p.textContent = `backpressure · ${factors[0][1]}`;
+  } else if (factors.length) {
+    p.className = 'pill pill-boot'; p.textContent = `pressure · ${factors[0][1]}`;
   } else { p.className = 'pill pill-up'; p.textContent = 'nominal'; }
 
   // engine pill (boot detail lives in the progress bar, not the pill)
@@ -104,25 +120,39 @@ function paintSnapshot(snap) {
 
   // model panel — compact, only things you'd act on
   const m = state.meta;
-  $('model-body').innerHTML = kvRows([
-    ['model', up ? (m.model_name || 'qwen3.8-flash-next') : '—'],
+  $('model-body').innerHTML = up ? kvRows([
+    ['model', m.model_name || 'qwen3.8-flash-next'],
     ['mode', m.mode || '—'], ['context', m.ctx || '—'], ['MTP', m.mtp ?? '—'],
     ['running / waiting', (e.running ?? 0) + ' / ' + (e.waiting ?? 0)],
     ['uptime', h.uptime_s ? upDur(h.uptime_s) : '—'],
     ['console', m.serve_port ? ':' + m.serve_port : '—'],
-  ]);
+  ]) : `<div class="text-slate-500 text-xs py-1">${c ? 'engine is ' + (state.status?.phase || 'booting') + '…' : 'engine down — <span class=\"text-slate-400\">▶ start</span> when you want it back'}</div>`;
 
   // perf numbers + chart feed
   $('kv-gen').textContent = fmtNum(e.gen_tok_per_s, 1);
+  const genSamples = state.hist.gen.filter((v) => v > 0);
+  $('kv-gen-avg').textContent = genSamples.length
+    ? fmtNum(genSamples.reduce((a, b) => a + b, 0) / genSamples.length, 1) : '—';
   $('kv-prefill').textContent = fmtNum(e.prompt_tok_per_s, 0);
   $('kv-usage').textContent = fmtNum(e.kv_usage_pct, 1) + '%';
   $('kv-prefix').textContent = e.prefix_hit_ratio != null ? fmtNum(e.prefix_hit_ratio * 100, 0) + '%' : '—';
-  $('perf-extra').innerHTML = kvRows([
-    ['time-to-first-token p50/p90', `${fmtNum(e.ttft_p50, 2)} / ${fmtNum(e.ttft_p90, 2)} s`],
-    ['inter-token', e.itl_p50 ? fmtNum(1 / e.itl_p50, 1) + ' tok/s' : '—'],
+  const timing = kvRows([
+    ['TTFT p50/p90', (e.ttft_p50 || e.ttft_p90) ? `${fmtNum(e.ttft_p50 * 1000, 0)} / ${fmtNum(e.ttft_p90 * 1000, 0)} ms` : '—'],
+    ['ITL p50', e.itl_p50 ? fmtNum(e.itl_p50 * 1000, 1) + ' ms' : '—'],
     ['gpu util · power', g.available ? `${fmtNum(g.util_pct, 0)}% · ${fmtNum(g.power_w, 0)} W` : 'n/a'],
-    ['queue pressure', (e.waiting ?? 0) > 0 ? `waiting ${e.waiting}` : 'idle'],
+    ['queue', (e.waiting ?? 0) > 0 ? `waiting ${e.waiting}` : 'idle'],
   ].map(([k, v]) => [`<span class="text-slate-500">${k}</span>`, v]));
+  const sp = e.spec;
+  const specBlock = sp?.active ? kvRows([
+    ['acceptance', fmtNum(sp.acceptance_pct, 1) + '%'],
+    ['accepted', fmtNum(sp.accepted_per_s, 1) + ' tok/s'],
+    ['drafted', fmtNum(sp.drafted_per_s, 1) + ' tok/s'],
+    ['mean / draft', fmtNum(sp.mean_accepted, 2) + ' tok'],
+  ].map(([k, v]) => [`<span class="text-slate-500">${k}</span>`, v]))
+    : '<div class="text-[11px] text-slate-600">MTP counters idle — drafts show here once requests flow</div>';
+  $('perf-extra').innerHTML =
+    `<div><div class="text-[11px] uppercase tracking-widest text-slate-600 mb-1">latency</div>${timing}</div>` +
+    `<div><div class="text-[11px] uppercase tracking-widest text-slate-600 mb-1">speculative (MTP)</div>${specBlock}</div>`
 
   state.hist.t.push(Date.now() / 1000);
   state.hist.gen.push(e.gen_tok_per_s ?? 0);
@@ -194,8 +224,8 @@ function paintRequests(rows) {
       <td class="py-1 font-mono text-slate-500">#${String(r.id).replace('r', '')}</td>
       <td class="${ph(r)}">${r.phase}</td>
       <td class="text-slate-400">${r.stream ? 'sse' : 'json'}${r.endpoint === 'messages' ? '·claude' : ''}</td>
-      <td class="text-right font-mono">${r.tokens || ''}</td>
       <td class="text-right font-mono text-slate-500">${r.prompt_tokens || ''}</td>
+      <td class="text-right font-mono">${r.tokens || ''}</td>
       <td class="text-right font-mono ${r.tps > 0 ? 'text-good' : ''}">${r.tps ? fmtNum(r.tps, 1) : ''}</td>
       <td class="truncate text-slate-500">${or(r.model)} · ${or(r.client)}</td>
     </tr>`).join('');
@@ -247,6 +277,10 @@ function wireUI() {
   $('logout').onclick = async () => { await fetch('/api/logout', { method: 'POST' }); location.reload(); };
   $('btn-restart-console').onclick = restartConsole;
   $('btn-help').onclick = () => openHelp(null);
+  const drawer = $('pg-drawer');
+  const setDrawer = (v) => { drawer.classList.toggle('hidden', !v); if (v) $('pg-msg').focus(); };
+  $('btn-play').onclick = () => setDrawer(drawer.classList.contains('hidden'));
+  $('btn-pg-close').onclick = () => setDrawer(false);
   $('help-close').onclick = () => $('help-modal').classList.add('hidden');
   document.querySelectorAll('[data-help]').forEach((el) =>
     el.addEventListener('click', (e) => { e.stopPropagation(); openHelp(el.dataset.help); }));
@@ -348,13 +382,14 @@ const HELP = {
     <p><b>start</b> launches with the selected profile. <b>restart</b> = down + up (kills in-flight requests; ~10 min before it serves again). <b>stop</b> frees ALL the memory — the machine feels brand new. Nothing here touches your data; the model just isn't serving while stopped.</p>`,
   profiles: `<h3 class="text-slate-200">Profiles</h3>
     <p>A profile is a saved set of engine choices (context size, MTP speculation, prefix cache, mode) living in <code>~/.config/qfn/profiles/*.toml</code>. Use them to A/B configurations without editing config each time: <code>qfn profile new burst</code>, edit, launch with it selected.</p>`,
-  backpressure: `<h3 class="text-slate-200">The green/yellow/red pill</h3>
-    <p>The single "should I worry?" answer. <b>nominal</b> = fine. <b>pressure</b> = swap is filling or memory stalls (PSI) — slow but working. <b>backpressure</b> = the KV cache is nearly full or IO is jammed: new requests will queue or slow sharply. The cure: let generations finish, or stop/start the engine to reclaim.</p>`,
+  backpressure: `<h3 class="text-slate-200">The status pill</h3>
+    <p>The one "should I worry?" answer, naming its dominant cause: <b>nominal</b> → fine. <b>pressure · io 91</b> → a resource is strained (here: disk stalls) but nothing is delayed yet. <b>backpressure</b> → the strain is now <i>delaying requests</i> (something is queued or swapped). The detail lives in the System panel's stall readouts — the pill is just the summary.</p>`,
   perf: `<h3 class="text-slate-200">Performance</h3>
-    <p><b>decode</b> = tokens generated per second (what you feel as typing speed). <b>prefill</b> = tokens read per second on the prompt. <b>KV cache</b> = working memory for active conversations; near 100% = things start queueing. <b>prefix hit</b> = % of prompt tokens reused from cache (why your second turn is instant).</p>`,
+    <p><b>generation</b> = output tokens/s (the typing-speed you feel). <b>prefill</b> = prompt tokens/s read. <b>KV cache</b> = working memory per active conversation; near 100% = queueing. <b>prefix cache hit</b> = share of prompt tokens reused (why turn two is instant).</p>
+    <p><b>TTFT</b> = time to first token; <b>ITL</b> = gap between tokens during generation. The <b>speculative</b> block is MTP in numbers: drafts the model guessed ahead and % that stuck — acceptance near 0 with MTP on means drafts are wasted work.</p>`,
   chart: `<p>One line each for decode (green, left axis), prefill (blue, left), KV/GPU% (amber, right, 0-100). Drag to zoom, hover for values. Flat green line at 0 = nothing is generating, not broken.</p>`,
   system: `<h3 class="text-slate-200">System</h3>
-    <p>The Spark has ONE 128 GB pool shared by CPU and GPU. <b>memory</b> shows used of total; <b>swap</b> is the disk pretending to be memory — sustained nonzero swap = everything slows down; <code>qfn doctor</code> tells you what's eating it. The bars always carry numbers because a bar without a max is a lie. <b>PSI</b> is the kernel admitting tasks are stalled waiting on CPU/memory/IO.</p>`,
+    <p>The Spark's 128 GB is <b>unified memory</b> — one pool shared by CPU and GPU alike. Bars always carry used-of-total numbers; a bar without a max is a lie. <b>swap</b> is disk pretending to be RAM — sustained nonzero swap = everything slows; <code>qfn doctor</code> names the culprit. <b>PSI</b> = the kernel admitting tasks are stalled on CPU / memory / IO.</p>`,
   requests: `<h3 class="text-slate-200">Requests</h3>
     <p>Live traffic through the front door: everything — the playground, <code>qfn chat</code>, your agents, Claude-Code-format calls (marked ·claude). Phases: queued → prefill → decoding → done. Click a row for timing details (time-to-first-token is the one to watch for responsiveness).</p>`,
   logs: `<h3 class="text-slate-200">Engine logs</h3>
@@ -364,7 +399,7 @@ const HELP = {
   'restart-console': `<h3 class="text-slate-200">Restart console</h3>
     <p>Restarts just the web server + proxy (NOT the model engine — generations keep running). The process exits and systemd relaunches it, so if you ran <code>sudo make install</code> with a newer build, this picks it up. CLI equivalent: <code>qfn serve restart</code>.</p>`,
   playground: `<h3 class="text-slate-200">Playground</h3>
-    <p>Chat with the model while trying settings live: <b>temperature</b> (0 = deterministic, 1 = creative), <b>top_p</b> (sampling cut), <b>max tokens</b> (length cap), <b>thinking</b> (lets the model reason first — slower, smarter). Presets combine them. <b>engine defaults</b> leaves every field out so the checkpoint's own generation_config (or sampling_defaults) decides. Stats show exactly what that combo cost: ttft + tok/s.</p>`,
+    <p>Chat while trying settings live: <b>temperature</b> (0 = repeatable, 1 = varied), <b>top_p</b> (sampling cut), <b>max tokens</b> (length cap), <b>reasoning mode</b> (model works the problem before answering — higher latency, sometimes better answers). Presets combine them; <b>engine defaults</b> sends none of the fields so the checkpoint's own defaults decide. Stats show what each combo cost: TTFT + tok/s.</p>`,
 };
 function openHelp(anchor) {
   $('help-body').innerHTML = anchor && HELP[anchor] ? HELP[anchor] : Object.values(HELP).join('<hr class="border-edge">');
@@ -378,5 +413,12 @@ function kvRows(pairs) {
 function upDur(s) { const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600); return (d ? d + 'd ' : '') + h + 'h'; }
 function durBetween(a, b) { return Math.max(0, Math.round((new Date(b) - new Date(a)) / 1000)) + 's'; }
 
-document.addEventListener('keydown', (e) => { if (e.key === 'Escape') document.querySelectorAll('.fixed.z-50').forEach((m) => m.classList.add('hidden')); });
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') { document.querySelectorAll('.fixed.z-50, #pg-drawer').forEach((m) => m.classList.add('hidden')); return; }
+  // 'p' toggles the playground — but never while typing
+  if (e.key === 'p' && !e.ctrlKey && !e.metaKey && !e.altKey && !/INPUT|TEXTAREA|SELECT/.test(document.activeElement?.tagName || '')) {
+    e.preventDefault();
+    $('pg-drawer').classList.toggle('hidden');
+  }
+});
 boot();

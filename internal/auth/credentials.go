@@ -17,8 +17,8 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"strings"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"filippo.io/age"
@@ -42,12 +42,12 @@ var ErrNoCredentials = errors.New("qfn: no credentials yet — run `qfn init` (o
 
 // Payload is the decrypted contents of credentials.age.
 type Payload struct {
-	PwSalt    []byte `json:"pw_salt"`
-	PwHash    []byte `json:"pw_hash"`
-	EngineKey string `json:"engine_key,omitempty"` // vLLM --api-key when lockdown on
-	FrontKey  string `json:"front_key,omitempty"`  // optional machine bearer key for :8799 (rotate via qfn serve --rotate-key)
-	APIKeys   []APIKeyRec `json:"api_keys,omitempty"` // named machine keys (qfn keys add)
-	Version   int    `json:"v"`
+	PwSalt    []byte      `json:"pw_salt"`
+	PwHash    []byte      `json:"pw_hash"`
+	EngineKey string      `json:"engine_key,omitempty"` // vLLM --api-key when lockdown on
+	FrontKey  string      `json:"front_key,omitempty"`  // optional machine bearer key for :8799 (rotate via qfn serve --rotate-key)
+	APIKeys   []APIKeyRec `json:"api_keys,omitempty"`   // named machine keys (qfn keys add)
+	Version   int         `json:"v"`
 }
 
 // Store manages <dir>/age.key + <dir>/credentials.age with hot-reload.
