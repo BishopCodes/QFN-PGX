@@ -56,6 +56,7 @@ func Render(cfg Config) string {
 	line(&b, "bind", q(cfg.Engine.Bind), `"127.0.0.1" keeps the engine reachable only through the qfn proxy; "0.0.0.0" exposes it directly`)
 	line(&b, "lockdown", tf(cfg.Engine.Lockdown), "start vLLM with a generated --api-key only the qfn proxy holds (stored age-encrypted)")
 	line(&b, "container_mem_cap", q(cfg.Engine.ContainerMem), `docker --memory ("" = none, correct here: PLE mmap needs the page cache; see qfn doctor)`)
+	line(&b, "images", n(cfg.Engine.Images), `images accepted per request (0 = text-only; vision weights exist in the snapshot)`)
 	line(&b, "image", q(cfg.Engine.Image), "engine image built from engine/Dockerfile")
 	line(&b, "model", q(cfg.Engine.Model), "checkpoint id (resolved to the local snapshot dir)")
 	line(&b, "name", q(cfg.Engine.Name), "docker container name")

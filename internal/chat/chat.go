@@ -4,6 +4,8 @@
 package chat
 
 import (
+	"encoding/base64"
+
 	"bufio"
 	"bytes"
 	"context"
@@ -25,13 +27,15 @@ type Options struct {
 	Model   string
 	NoThink bool
 	System  string
+	Image   string // attach this image file to the FIRST user turn (vision probe)
 }
 
 // Session is a multi-turn conversation.
 type Session struct {
-	opts     Options
-	messages []map[string]string
-	hc       *http.Client
+	opts      Options
+	messages  []map[string]any
+	usedImage bool
+	hc        *http.Client
 }
 
 // New starts a session and prints the banner.
@@ -42,10 +46,10 @@ func New(opts Options) *Session {
 	return &Session{
 		opts: opts,
 		hc:   &http.Client{},
-		messages: func() []map[string]string {
-			msgs := []map[string]string{}
+		messages: func() []map[string]any {
+			msgs := []map[string]any{}
 			if opts.System != "" {
-				msgs = append(msgs, map[string]string{"role": "system", "content": opts.System})
+				msgs = append(msgs, map[string]any{"role": "system", "content": opts.System})
 			}
 			return msgs
 		}(),
@@ -54,7 +58,20 @@ func New(opts Options) *Session {
 
 // Send one user turn; returns assistant text.
 func (s *Session) Send(ctx context.Context, text string, out io.Writer) (string, error) {
-	s.messages = append(s.messages, map[string]string{"role": "user", "content": text})
+	var content any = text
+	if s.opts.Image != "" && !s.usedImage {
+		s.usedImage = true
+		b, err := os.ReadFile(s.opts.Image)
+		if err != nil {
+			return "", err
+		}
+		content = []any{
+			map[string]any{"type": "text", "text": text},
+			map[string]any{"type": "image_url", "image_url": map[string]string{
+				"url": "data:image/png;base64," + base64.StdEncoding.EncodeToString(b)}},
+		}
+	}
+	s.messages = append(s.messages, map[string]any{"role": "user", "content": content})
 	body := map[string]any{
 		"model": s.opts.Model, "messages": s.messages, "stream": true, "temperature": 0.7,
 	}
@@ -126,7 +143,11 @@ func (s *Session) Send(ctx context.Context, text string, out io.Writer) (string,
 			if !firstSet {
 				ttft = time.Since(start)
 				firstSet = true
-				select { case <-spinnerDone: default: close(spinnerDone) } // stop spinner, clear line
+				select {
+				case <-spinnerDone:
+				default:
+					close(spinnerDone)
+				} // stop spinner, clear line
 			}
 			tokens++
 			sb.WriteString(c.Delta.Content)
@@ -137,7 +158,7 @@ func (s *Session) Send(ctx context.Context, text string, out io.Writer) (string,
 	if ctx.Err() != nil {
 		fmt.Fprintln(out, "\n  ⏹ cancelled")
 	}
-	s.messages = append(s.messages, map[string]string{"role": "assistant", "content": sb.String()})
+	s.messages = append(s.messages, map[string]any{"role": "assistant", "content": sb.String()})
 	dur := time.Since(start)
 	if tokens > 0 {
 		fmt.Fprintf(out, "\n  · ttft %s · %d tok · %.1f tok/s\n",
@@ -181,7 +202,7 @@ func (s *Session) popUser() {
 func (s *Session) Clear() {
 	s.messages = s.messages[:0]
 	if s.opts.System != "" {
-		s.messages = append(s.messages, map[string]string{"role": "system", "content": s.opts.System})
+		s.messages = append(s.messages, map[string]any{"role": "system", "content": s.opts.System})
 	}
 }
 

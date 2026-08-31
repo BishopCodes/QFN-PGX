@@ -91,8 +91,12 @@ func DockerArgs(e config.Engine, loc SnapshotLocator, o LaunchOpts) ([]string, e
 	} else {
 		args = append(args, "--no-enable-prefix-caching")
 	}
+	// Vision is opt-in in vLLM's CLI contract; be explicit either way so the
+	// engine's accepted modalities are visible in the argv and stable across
+	// vLLM versions (defaults for unspecified modalities have moved before).
 	args = append(args,
 		"--enable-chunked-prefill", "--max-num-batched-tokens", "8192",
+		"--limit-mm-per-prompt", fmt.Sprintf(`{"image": %d}`, max(e.Images, 0)),
 		"-cc.cudagraph_mode=PIECEWISE",
 		"-cc.splitting_ops="+splittingOps,
 		"--no-enable-flashinfer-autotune",

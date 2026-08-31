@@ -46,6 +46,7 @@ type Engine struct {
 	Bind         string  `toml:"bind"`              // docker -p bind address (127.0.0.1 = lockdown default)
 	Lockdown     bool    `toml:"lockdown"`          // serve engine with --api-key; only qfn holds it
 	ContainerMem string  `toml:"container_mem_cap"` // docker --memory opt-in ("" = none; see doctor)
+	Images       int     `toml:"images"`            // images allowed per request (0 = text-only)
 	Image        string  `toml:"image"`
 	Model        string  `toml:"model"`
 	Name         string  `toml:"name"` // docker container name
@@ -108,6 +109,7 @@ func Defaults() Config {
 			Port:         18300,
 			Bind:         "127.0.0.1",
 			Lockdown:     true,
+			Images:       4,
 			ContainerMem: "",
 			Image:        "qwen38-flash-dgx",
 			Model:        "RadixArk/Qwen3.8-Flash-Next-NVFP4",

@@ -159,7 +159,8 @@ func addTools(root *cobra.Command, app *App) {
 			noThink, _ := c.Flags().GetBool("no-think")
 			sys, _ := c.Flags().GetString("system")
 			direct, _ := c.Flags().GetBool("direct")
-			opts := chat.Options{NoThink: noThink, System: sys}
+			img, _ := c.Flags().GetString("image")
+			opts := chat.Options{NoThink: noThink, System: sys, Image: img}
 			if direct {
 				opts.Base = app.EngineBaseURL()
 				opts.Key = app.engineKeyOnly()
@@ -176,6 +177,7 @@ func addTools(root *cobra.Command, app *App) {
 	ch.Flags().Bool("no-think", false, "disable reasoning mode (chat_template_kwargs.enable_thinking=false)")
 	ch.Flags().String("system", "", "system prompt")
 	ch.Flags().Bool("direct", false, "bypass the console and hit the engine directly")
+	ch.Flags().String("image", "", "attach an image to your first message (vision probe — errors show why if the engine declines)")
 	root.AddCommand(ch)
 
 	// ---- stats ----

@@ -27,6 +27,7 @@
     <span id="op-status" class="text-xs text-slate-500 truncate"></span>
     <span class="flex-1"></span>
     <span id="clock" class="font-mono text-xs text-slate-500"></span>
+    <button id="btn-play" class="btn" title="playground — chat with live settings (P)">playground</button>
     <button id="btn-help" class="btn" title="What am I looking at?">? help</button>
     <button id="btn-restart-console" class="btn" data-help="restart-console">↻ console</button>
     <button id="logout" class="btn">sign out</button>
@@ -150,8 +151,13 @@
             </label>
           </div>
           <label class="flex items-center gap-2 text-xs text-slate-500">
-            <input id="pg-think" type="checkbox" checked class="accent-[#4cc2ff]"> reasoning mode
-            <span class="text-slate-600">— increases latency</span>
+            <select id="pg-think" class="btn !px-2">
+              <option value="">engine default</option>
+              <option value="off">reasoning: off</option>
+              <option value="low">reasoning: low (≈1k tokens)</option>
+              <option value="med">reasoning: medium (≈4k)</option>
+              <option value="high">reasoning: high (≈16k)</option>
+            </select> <span class="text-slate-600">thinking budget</span>
           </label>
           <div class="flex gap-2 mt-1">
             <button id="btn-send" class="btn flex-1">Send ▸</button>

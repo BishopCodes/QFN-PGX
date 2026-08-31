@@ -6,7 +6,7 @@
 const $ = (id) => document.getElementById(id);
 const state = { hist: { t: [], gen: [], prompt: [], pct: [] }, rows: {}, meta: {}, status: null };
 
-const fmtGib = (kib) => kib ? (kib / 1048576).toFixed(1) : null;
+const fmtGib = (kib) => (kib ? kib / 1048576 : 0).toFixed(1);
 const fmtNum = (v, d = 1) => (v ?? null) === null ? '—' : (+v).toFixed(d);
 const fmtBytes = (b) => b > 1e9 ? (b / 1e9).toFixed(2) + ' GB/s' : b > 1e6 ? (b / 1e6).toFixed(1) + ' MB/s'
   : b > 1e3 ? (b / 1e3).toFixed(0) + ' kB/s' : Math.round(b) + ' B/s';
@@ -279,8 +279,9 @@ function wireUI() {
   $('btn-help').onclick = () => openHelp(null);
   const drawer = $('pg-drawer');
   const setDrawer = (v) => { drawer.classList.toggle('hidden', !v); if (v) $('pg-msg').focus(); };
-  $('btn-play').onclick = () => setDrawer(drawer.classList.contains('hidden'));
-  $('btn-pg-close').onclick = () => setDrawer(false);
+  const wire = (id, fn) => { const el = $(id); if (el) el.onclick = fn; };
+  wire('btn-play', () => setDrawer(drawer.classList.contains('hidden')));
+  wire('btn-pg-close', () => setDrawer(false));
   $('help-close').onclick = () => $('help-modal').classList.add('hidden');
   document.querySelectorAll('[data-help]').forEach((el) =>
     el.addEventListener('click', (e) => { e.stopPropagation(); openHelp(el.dataset.help); }));
@@ -317,10 +318,10 @@ let pgAbort = null;
 function wirePlayground() {
   $('pg-preset').onchange = () => {
     const p = $('pg-preset').value, set = (id, v) => $(id).value = v;
-    set('pg-temp', ''); set('pg-topp', ''); set('pg-maxtok', ''); $('pg-think').checked = true;
+    set('pg-temp', ''); set('pg-topp', ''); set('pg-maxtok', ''); set('pg-think', '');
     if (p === 'deterministic') set('pg-temp', '0');
     if (p === 'creative') { set('pg-temp', '1'); set('pg-topp', '0.95'); }
-    if (p === 'fast') { set('pg-maxtok', '64'); $('pg-think').checked = false; }
+    if (p === 'fast') { set('pg-maxtok', '64'); set('pg-think', 'off'); }
   };
   $('btn-send').onclick = pgSend;
   $('pg-msg').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) pgSend(); });
@@ -336,7 +337,9 @@ async function pgSend() {
   if ($('pg-temp').value !== '') body.temperature = +$('pg-temp').value;
   if ($('pg-topp').value !== '') body.top_p = +$('pg-topp').value;
   if ($('pg-maxtok').value !== '') body.max_tokens = +$('pg-maxtok').value;
-  body.chat_template_kwargs = { enable_thinking: $('pg-think').checked };
+  const think = $('pg-think').value; // '', off, low, med, high
+  if (think === 'off') body.chat_template_kwargs = { enable_thinking: false };
+  else if (think) body.chat_template_kwargs = { enable_thinking: true, thinking_budget: { low: 1024, med: 4096, high: 16384 }[think] };
   body.stream_options = { include_usage: true };
 
   const out = $('pg-out');
@@ -399,7 +402,8 @@ const HELP = {
   'restart-console': `<h3 class="text-slate-200">Restart console</h3>
     <p>Restarts just the web server + proxy (NOT the model engine — generations keep running). The process exits and systemd relaunches it, so if you ran <code>sudo make install</code> with a newer build, this picks it up. CLI equivalent: <code>qfn serve restart</code>.</p>`,
   playground: `<h3 class="text-slate-200">Playground</h3>
-    <p>Chat while trying settings live: <b>temperature</b> (0 = repeatable, 1 = varied), <b>top_p</b> (sampling cut), <b>max tokens</b> (length cap), <b>reasoning mode</b> (model works the problem before answering — higher latency, sometimes better answers). Presets combine them; <b>engine defaults</b> sends none of the fields so the checkpoint's own defaults decide. Stats show what each combo cost: TTFT + tok/s.</p>`,
+    <p>Chat while trying settings live: <b>temperature</b> (0 = repeatable, 1 = varied), <b>top_p</b> (sampling cut), <b>max tokens</b> (length cap), <b>thinking budget</b> (how much reasoning the model may spend before answering: off/low/medium/high — more budget, more latency). Presets combine them; <b>engine defaults</b> sends none of the fields so the checkpoint's own defaults decide. Stats show what each combo cost: TTFT + tok/s.</p>
+    <p>Images: the engine lane must be launched with images allowed (engine.images in config.toml); the API speaks standard OpenAI/Anthropic multimodal shapes — test from the CLI with <code>qfn chat --image photo.jpg "what is this?"</code>.</p>`,
 };
 function openHelp(anchor) {
   $('help-body').innerHTML = anchor && HELP[anchor] ? HELP[anchor] : Object.values(HELP).join('<hr class="border-edge">');
