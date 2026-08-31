@@ -283,8 +283,14 @@ function wireUI() {
   wire('btn-play', () => setDrawer(drawer.classList.contains('hidden')));
   wire('btn-pg-close', () => setDrawer(false));
   $('help-close').onclick = () => $('help-modal').classList.add('hidden');
-  document.querySelectorAll('[data-help]').forEach((el) =>
-    el.addEventListener('click', (e) => { e.stopPropagation(); openHelp(el.dataset.help); }));
+  // Help opens ONLY from ? buttons. Other elements that carry a data-help
+  // key (charts, selects, action buttons like ↻ console) get a hover
+  // tooltip instead — clicking those must do their job, never open modals.
+  const plain = (k) => (HELP[k] || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 220);
+  document.querySelectorAll('[data-help]').forEach((el) => {
+    if (el.matches('button.help')) el.addEventListener('click', (e) => { e.stopPropagation(); openHelp(el.dataset.help); });
+    else if (!el.title) el.title = plain(el.dataset.help);
+  });
   wirePlayground();
 }
 
