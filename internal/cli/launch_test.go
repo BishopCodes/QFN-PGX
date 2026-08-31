@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -42,6 +43,62 @@ func TestBuildLaunchCodexAndGeneric(t *testing.T) {
 	}
 	if _, err := buildLaunch("bogus", "x", "k", "m", 1); err == nil {
 		t.Fatal("unknown agent must error")
+	}
+}
+
+func TestBuildLaunchOpencode(t *testing.T) {
+	pl, err := buildLaunch("opencode", "http://h:1/", "k", "m1", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pl.Binary != "opencode" {
+		t.Fatalf("binary: %s", pl.Binary)
+	}
+	// The harness config must carry the front key, not the built-in openai
+	// provider. OPENAI_API_KEY would make opencode's default openai provider
+	// (models.dev list, api.openai.com) read the front key — leaked and useless.
+	if _, ok := pl.EnvSet["OPENAI_API_KEY"]; ok {
+		t.Fatalf("opencode must not get OPENAI_API_KEY: %v", pl.EnvSet)
+	}
+	if _, ok := pl.EnvSet["OPENCODE_CONFIG"]; ok {
+		t.Fatal("OPENCODE_CONFIG is resolved by addLaunch (needs StateDir), not the pure plan")
+	}
+}
+
+func TestOpencodeConfigJSON(t *testing.T) {
+	b, err := opencodeConfigJSON("http://127.0.0.1:8799/", "fk-1234567890", "qwen3.8-flash-next", 262144)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var c opencodeConfig
+	if err := json.Unmarshal(b, &c); err != nil {
+		t.Fatalf("generated opencode config must be valid JSON: %v", err)
+	}
+	if c.Schema != "https://opencode.ai/config.json" {
+		t.Fatalf("schema: %s", c.Schema)
+	}
+	if c.Model != "qfn/qwen3.8-flash-next" {
+		t.Fatalf("default model: %s", c.Model)
+	}
+	p, ok := c.Provider["qfn"]
+	if !ok {
+		t.Fatal("provider key qfn missing")
+	}
+	if p.NPM != "@ai-sdk/openai-compatible" {
+		t.Fatalf("npm: %s", p.NPM)
+	}
+	if p.Options["baseURL"] != "http://127.0.0.1:8799/v1" {
+		t.Fatalf("baseURL: %v", p.Options["baseURL"])
+	}
+	if p.Options["apiKey"] != "fk-1234567890" {
+		t.Fatalf("apiKey: %v", p.Options["apiKey"])
+	}
+	m, ok := p.Models["qwen3.8-flash-next"]
+	if !ok {
+		t.Fatal("served model must be registered under the provider")
+	}
+	if m.Limit.Context != 262144 || m.Limit.Output != 16384 {
+		t.Fatalf("limits: %+v", m.Limit)
 	}
 }
 

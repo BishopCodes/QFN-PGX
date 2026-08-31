@@ -99,10 +99,13 @@ web/              embedded console UI (vanilla ES, no build step)
 The console password (≥12 chars, set in the wizard) is Argon2id-hashed and
 stored alongside the engine's API key in an age-encrypted file. Sessions are
 HttpOnly/SameSite=Strict and die with `qfn serve`. Failed logins lock an IP
-out for 1→64 min (persisted). Bind beyond loopback can't disable auth —
-validation refuses. Lockdown can't be enabled without a key. Everything else
-is a plain-HTTP LAN tool by design: the recommended remote view is
-`ssh -L 8799:localhost:8799 <spark>`.
+out for 1→64 min (persisted). The console binds `0.0.0.0` by default — it's a
+plain-HTTP LAN tool — so it is reachable from other boxes; open the port in
+your firewall (`sudo ufw allow 8799`) and keep an eye on who can reach the
+LAN. Bind beyond loopback can't disable auth — validation refuses. (Want it
+loopback-only? Set `serve.bind = "127.0.0.1"`, or reach it tunneled via
+`ssh -L 8799:localhost:8799 <spark>`.) The engine itself always binds
+loopback under lockdown; `/v1/*` on the console is the only way in.
 
 ## Build
 

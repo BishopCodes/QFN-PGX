@@ -115,7 +115,7 @@ func Defaults() Config {
 		},
 		Serve: Serve{
 			Port:             8799,
-			Bind:             "127.0.0.1",
+			Bind:             "0.0.0.0",
 			Proxy:            true,
 			MaxPromptTokens:  0,
 			AuthEnabled:      true,

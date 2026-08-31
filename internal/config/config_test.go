@@ -26,6 +26,9 @@ func TestDefaultsAreValid(t *testing.T) {
 	if !d.Engine.Lockdown || d.Engine.Bind != "127.0.0.1" {
 		t.Fatal("lockdown + loopback bind must be the default posture")
 	}
+	if d.Serve.Bind != "0.0.0.0" {
+		t.Fatal("console must default to a LAN-reachable bind (auth stays on)")
+	}
 }
 
 func TestLoadMissingReturnsNotOK(t *testing.T) {

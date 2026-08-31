@@ -61,7 +61,7 @@ func Render(cfg Config) string {
 	line(&b, "name", q(cfg.Engine.Name), "docker container name")
 	b.WriteString("\n[serve]\n")
 	line(&b, "port", n(cfg.Serve.Port), "web console + proxy port (ssh -L 8799:localhost:8799 <spark> to reach it)")
-	line(&b, "bind", q(cfg.Serve.Bind), "console bind; anything beyond loopback forces auth on")
+	line(&b, "bind", q(cfg.Serve.Bind), "console bind; 0.0.0.0 = reachable on the LAN (auth is always on; open the port in the firewall, e.g. `sudo ufw allow 8799`)")
 	line(&b, "proxy", tf(cfg.Serve.Proxy), "mount /v1/* as the OpenAI-compatible front door on this port")
 	line(&b, "max_prompt_tokens", n(cfg.Serve.MaxPromptTokens), "0 = no ceiling; >0 rejects over-long prompts via a /tokenize pre-check")
 	line(&b, "sampling_defaults", tf(cfg.Serve.SamplingDefaults), "true = proxy fills omitted temperature/top_p/top_k from the checkpoint's generation_config.json")

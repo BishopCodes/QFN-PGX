@@ -147,14 +147,14 @@ func Wizard(cfg config.Config, edit bool) (config.Config, string, error) {
 	if err != nil {
 		return out, "", err
 	}
-	out.Serve.Bind, err = Ask("console bind address", out.Serve.Bind, `anything beyond loopback forces auth on (it's always on)`)
+	out.Serve.Bind, err = Ask("console bind address", out.Serve.Bind, `"0.0.0.0" exposes the console + front door on the LAN (auth stays on); 127.0.0.1 = this machine only`)
 	if err != nil {
 		return out, "", err
 	}
 	if !edit || !config.IsLoopbackBind(out.Serve.Bind) {
 		dimf("  the console stays up across reboots (`qfn service install`) and can start/stop the engine from the browser —")
-		dimf("  so it gets a password. Over the LAN it rides plain HTTP; the safe access path is:")
-		dimf("    ssh -L %d:localhost:%d <spark>", out.Serve.Port, out.Serve.Port)
+		dimf("  so it gets a password. It rides plain HTTP; on a LAN open the port in the firewall")
+		dimf("  (e.g. `sudo ufw allow %d`), or tunnel it: ssh -L %d:localhost:%d <spark>", out.Serve.Port, out.Serve.Port, out.Serve.Port)
 		pw, err := AskPassword("console password (≥12 chars)", 12)
 		if err != nil {
 			return out, "", err

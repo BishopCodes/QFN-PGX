@@ -97,8 +97,11 @@ func buildLaunch(agent, server, key, model string, ctxWindow int) (LaunchPlan, e
 		pl.EnvSet = map[string]string{"OPENAI_BASE_URL": openaiBase, "OPENAI_API_KEY": key}
 	case "opencode":
 		pl.Binary = "opencode"
-		pl.EnvSet = map[string]string{"OPENAI_BASE_URL": openaiBase, "OPENAI_API_KEY": key}
-		pl.Note = "opencode may also want a provider entry in its config pointing at " + openaiBase
+		// Harness config (provider + model + baseURL) is written to the state
+		// dir by addLaunch and handed to opencode via OPENCODE_CONFIG — env
+		// vars are not enough for opencode (the model must be registered).
+		// No OPENAI_API_KEY here: the built-in openai provider would read it
+		// against api.openai.com; the qfn provider carries the front key.
 	case "dsh":
 		pl.Binary = "dsh"
 		pl.EnvSet = map[string]string{"DEEPSEEK_API_KEY": key}
@@ -167,6 +170,18 @@ func addLaunch(root *cobra.Command, app *App) {
 				}
 			}
 
+			// opencode needs a harness config file (provider + model on the
+			// front door); OPENCODE_CONFIG is the supported way to hand it
+			// over without touching the user's own opencode.json.
+			var opencodeConfigPath string
+			if agent == "opencode" {
+				opencodeConfigPath, err = writeOpencodeConfig(app, server, key, model, ctxWindow)
+				if err != nil {
+					return err
+				}
+				pl.EnvSet["OPENCODE_CONFIG"] = opencodeConfigPath
+			}
+
 			// Show the plan (key masked).
 			dimf("launch: %s → %s · model %s · ctx %d", agent, strings.TrimRight(server, "/")+"/v1", model, ctxWindow)
 			for _, k := range sortedKeys(pl.EnvSet) {
@@ -182,6 +197,9 @@ func addLaunch(root *cobra.Command, app *App) {
 			}
 			if settingsPath != "" {
 				fmt.Printf("  settings: %s\n", settingsPath)
+			}
+			if opencodeConfigPath != "" {
+				fmt.Printf("  opencode config: %s (OPENCODE_CONFIG)\n", opencodeConfigPath)
 			}
 			if dryRun {
 				return nil
@@ -264,6 +282,76 @@ models:
   max_context_tokens: %d
 `, strings.TrimRight(server, "/")+"/v1", key, model, ctxWindow)
 	if err := os.WriteFile(path, []byte(yaml), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
+// opencodeConfig mirrors the subset of opencode.json schema `qfn launch`
+// writes: one OpenAI-compatible provider pointing at the front door, one
+// registered model (the served one), and that model as the default. The
+// $schema pins the documented config shape so editors validate it.
+type opencodeConfig struct {
+	Schema   string                `json:"$schema"`
+	Model    string                `json:"model"`
+	Provider map[string]ocProvider `json:"provider"`
+}
+
+type ocProvider struct {
+	NPM     string             `json:"npm"`
+	Name    string             `json:"name"`
+	Options map[string]any     `json:"options"`
+	Models  map[string]ocModel `json:"models"`
+}
+
+type ocModel struct {
+	Name  string  `json:"name"`
+	Limit ocLimit `json:"limit"`
+}
+
+type ocLimit struct {
+	Context int `json:"context"`
+	Output  int `json:"output"`
+}
+
+// opencodeConfigJSON builds the harness config for the served model.
+func opencodeConfigJSON(server, key, model string, ctxWindow int) ([]byte, error) {
+	if ctxWindow <= 0 {
+		ctxWindow = 262144
+	}
+	cfg := opencodeConfig{
+		Schema: "https://opencode.ai/config.json",
+		Model:  "qfn/" + model,
+		Provider: map[string]ocProvider{
+			"qfn": {
+				NPM:  "@ai-sdk/openai-compatible",
+				Name: "QFN Spark (local)",
+				Options: map[string]any{
+					"baseURL": strings.TrimRight(server, "/") + "/v1",
+					"apiKey":  key,
+					"timeout": false,
+				},
+				Models: map[string]ocModel{
+					model: {Name: model, Limit: ocLimit{Context: ctxWindow, Output: 16384}},
+				},
+			},
+		},
+	}
+	return json.MarshalIndent(cfg, "", "  ")
+}
+
+// writeOpencodeConfig drops the harness config in the state dir; addLaunch
+// points opencode at it via OPENCODE_CONFIG.
+func writeOpencodeConfig(app *App, server, key, model string, ctxWindow int) (string, error) {
+	if err := os.MkdirAll(app.StateDir(), 0o755); err != nil {
+		return "", err
+	}
+	path := filepath.Join(app.StateDir(), "opencode-config.json")
+	b, err := opencodeConfigJSON(server, key, model, ctxWindow)
+	if err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(path, b, 0o600); err != nil {
 		return "", err
 	}
 	return path, nil
