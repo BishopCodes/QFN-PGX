@@ -223,6 +223,33 @@ func (c *captureDocker) FollowLogs(ctx context.Context, name string, w io.Writer
 	return nil
 }
 
+func TestUpArgvPassesDockerArgsVerbatim(t *testing.T) {
+	// Full chain: DockerArgs output handed to Manager.Up must reach docker
+	// unchanged — exactly one leading "run" subcommand.
+	d := &captureDocker{}
+	m := NewManager(d)
+	loc := fakeLoc{}
+	args, err := DockerArgs(config.Defaults().Engine, loc, LaunchOpts{EngineAPIKey: "k", HFCacheHost: "/home/x/.cache/huggingface"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if args[0] != "run" || args[1] != "-d" {
+		t.Fatalf("DockerArgs must lead with the run subcommand: %v", args[:3])
+	}
+	for i, a := range args[1:] {
+		if a == "run" {
+			t.Fatalf("stray extra run subcommand at argv %d — docker would image-pull it: %v", i+1, args)
+		}
+	}
+	op, _ := m.TryBegin("up", "cli")
+	if err := m.Up(context.Background(), op, args, "qwen38-flash"); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Join(d.runs[1], " ") != strings.Join(args, " ") {
+		t.Fatalf("Manager rewrote argv:\n in:  %v\n out: %v", args, d.runs[1])
+	}
+}
+
 func TestManagerOpQueue(t *testing.T) {
 	d := &captureDocker{}
 	m := NewManager(d)
@@ -236,8 +263,13 @@ func TestManagerOpQueue(t *testing.T) {
 	if err := m.Up(context.Background(), op, []string{"run", "-d", "img"}, "c1"); err != nil {
 		t.Fatal(err)
 	}
-	if len(d.runs) != 2 || d.runs[0][0] != "rm" || d.runs[1][0] != "run" {
+	if len(d.runs) != 2 || d.runs[0][0] != "rm" {
 		t.Fatalf("expected rm -f then run: %v", d.runs)
+	}
+	// EXACT passthrough: Manager must not re-prepend the "run" subcommand —
+	// `docker run run …` makes docker pull an image called "run" (exit 125).
+	if got := strings.Join(d.runs[1], " "); got != "run -d img" {
+		t.Fatalf("argv mutated by Manager (double subcommand?): %q", got)
 	}
 	if last, ok := m.LastOp(); !ok || !last.Done {
 		t.Fatalf("op not finished: %+v", last)

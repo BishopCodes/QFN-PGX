@@ -207,6 +207,9 @@ func runUp(ctx context.Context, app *App, uf *upFlags) error {
 	if eng.Mode == "hybrid" && !st.HybridPrepared {
 		return errors.New("mode=hybrid but the fp8 variant isn't prepared — run `qfn prepare-hybrid` (~10 min)")
 	}
+	if exists, _, err := engine.ImageExists(ctx, app.Docker, eng.Image); err == nil && !exists {
+		return fmt.Errorf("image %s not built — run `qfn build` first", eng.Image)
+	}
 	args, err := engine.DockerArgs(eng, loc, engine.LaunchOpts{
 		EngineAPIKey: key, HFCacheHost: config.ExpandHome(app.Cfg.Paths.HFCache),
 	})

@@ -124,7 +124,15 @@ func runServe(ctx context.Context, app *App, port int, bind string, noProxy bool
 		},
 		Resolve:   app.Resolve,
 		Locator:   app.Locator,
-		Preflight: func(ctx context.Context, e config.Engine) error { return doctor.Preflight(ctx, live(), e, false) },
+		Preflight: func(ctx context.Context, e config.Engine) error {
+			if err := doctor.Preflight(ctx, live(), e, false); err != nil {
+				return err
+			}
+			if exists, _, err := engine.ImageExists(ctx, app.Docker, e.Image); err == nil && !exists {
+				return fmt.Errorf("image %s not built — run `qfn build` on the Spark first", e.Image)
+			}
+			return nil
+		},
 		Meta:      func() map[string]any { return app.meta() },
 		Version:   Version(),
 	})

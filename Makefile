@@ -1,8 +1,8 @@
 # QFN-PGX — build/test/deploy helpers (make -j)
 BIN     := bin/qfn
 MODULE  := github.com/BishopCodes/qfn-pgx
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -s -w -X $(MODULE)/internal/cli.version=$(VERSION)
+VERSION ?= $(shell git -c safe.directory='*' describe --tags --always --dirty 2>/dev/null || echo dev)
+LDFLAGS := -s -w -X main.version=$(VERSION)
 GOENV   := CGO_ENABLED=0
 
 .PHONY: build install test vet race arm64 deploy clean fmt

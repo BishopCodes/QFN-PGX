@@ -13,7 +13,7 @@ import (
 	"github.com/BishopCodes/qfn-pgx/internal/cli"
 )
 
-// version is stamped with -ldflags "-X github.com/BishopCodes/qfn-pgx/internal/cli.version=…".
+// version is stamped with -ldflags "-X main.version=…" (see Makefile).
 var version = "dev"
 
 func main() {

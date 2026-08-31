@@ -107,14 +107,26 @@ func (m *Manager) unitPath(unit string) string {
 }
 
 // Install renders, writes, and enables units (idempotent).
-func (m *Manager) Install(ctx context.Context, binaryPath string, withEngine bool) ([]string, error) {
-	u, err := user.Current()
-	if err != nil {
-		return nil, err
+// UnitUser is the account the units run as. Under sudo that is the REAL
+// human (SUDO_USER), not root — so the service reads the same config,
+// credentials and HF cache that `qfn init` set up, instead of root's empty
+// /root/.config and a stray /hf mount source.
+func UnitUser() string {
+	if os.Geteuid() == 0 {
+		if su := os.Getenv("SUDO_USER"); su != "" {
+			return su
+		}
 	}
+	if u, err := user.Current(); err == nil {
+		return u.Username
+	}
+	return "root"
+}
+
+func (m *Manager) Install(ctx context.Context, binaryPath string, withEngine bool) ([]string, error) {
 	var done []string
 	render := func(unit, tmpl string) error {
-		content := fmt.Sprintf(tmpl, u.Username, binaryPath)
+		content := fmt.Sprintf(tmpl, UnitUser(), binaryPath)
 		path := m.unitPath(unit)
 		if err := m.deps.Write(path, []byte(content), 0o644); err != nil {
 			return fmt.Errorf("writing %s: %w", path, err)

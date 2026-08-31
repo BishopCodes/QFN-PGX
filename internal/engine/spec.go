@@ -5,6 +5,7 @@
 package engine
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -41,6 +42,10 @@ type LaunchOpts struct {
 func DockerArgs(e config.Engine, loc SnapshotLocator, o LaunchOpts) ([]string, error) {
 	if e.Lockdown && o.EngineAPIKey == "" {
 		return nil, fmt.Errorf("engine.lockdown is on but no engine API key is available (run `qfn init` or `qfn lockdown on` again)")
+	}
+	if o.HFCacheHost == "" {
+		// "-v :/hf" surfaces as a baffled docker error; name the real cause.
+		return nil, errors.New("empty HF cache host path — check paths.hf_cache (`qfn config get paths.hf_cache`)")
 	}
 	snapIn, hybridEnv, err := loc.SnapshotInContainer(e)
 	if err != nil {

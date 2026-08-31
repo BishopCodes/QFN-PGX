@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/user"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -122,5 +123,23 @@ func TestInstallIdempotent(t *testing.T) {
 	}
 	if _, err := m.Install(context.Background(), "/bin/qfn", false); err != nil {
 		t.Fatalf("second install must be clean: %v", err)
+	}
+}
+
+func TestUnitUserPrefersRealHumanUnderSudo(t *testing.T) {
+	t.Setenv("SUDO_USER", "human")
+	got := UnitUser()
+	if os.Geteuid() == 0 {
+		if got != "human" {
+			t.Fatalf("root must defer to SUDO_USER, got %q", got)
+		}
+		return
+	}
+	u, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != u.Username {
+		t.Fatalf("non-root must ignore SUDO_USER, got %q want %q", got, u.Username)
 	}
 }
