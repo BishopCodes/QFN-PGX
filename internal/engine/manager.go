@@ -131,7 +131,7 @@ func (m *Manager) up(ctx context.Context, args []string, name string) error {
 	// serve.sh tolerates rm -f failure entirely (`|| true`): a missing or
 	// stopped container is exactly the state we want before `docker run`.
 	_, _ = m.docker.Run(ctx, "rm", "-f", name)
-	out, err := m.docker.Run(ctx, append([]string{"run"}, args...)...)
+	out, err := m.docker.Run(ctx, args...)
 	if err != nil {
 		return fmt.Errorf("docker run failed: %w\n%s", err, out)
 	}

@@ -142,6 +142,9 @@ func cmdCtx(c *cobra.Command) context.Context { return c.Context() }
 // requireConfig fails commands that can't run without a completed setup.
 func (a *App) requireConfig() error {
 	if !a.Cfg.Meta.FirstRunDone {
+		if os.Geteuid() == 0 && os.Getenv("SUDO_USER") != "" {
+			return errors.New("setup incomplete — run `qfn init` first (config not found for root; SUDO_USER=" + os.Getenv("SUDO_USER") + " home=" + config.Dir() + ")")
+		}
 		return errors.New("setup incomplete — run `qfn init` first")
 	}
 	return nil

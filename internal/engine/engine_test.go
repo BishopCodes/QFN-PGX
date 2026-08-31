@@ -233,7 +233,7 @@ func TestManagerOpQueue(t *testing.T) {
 	if _, err := m.TryBegin("up", "serve"); err == nil {
 		t.Fatal("second op must be refused while one is in flight")
 	}
-	if err := m.Up(context.Background(), op, []string{"-d", "img"}, "c1"); err != nil {
+	if err := m.Up(context.Background(), op, []string{"run", "-d", "img"}, "c1"); err != nil {
 		t.Fatal(err)
 	}
 	if len(d.runs) != 2 || d.runs[0][0] != "rm" || d.runs[1][0] != "run" {
