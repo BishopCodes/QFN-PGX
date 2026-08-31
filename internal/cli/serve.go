@@ -106,7 +106,15 @@ func serveStopCmd(app *App) *cobra.Command {
 			}
 			pid, ok := readPid(app)
 			if !ok {
-				dimf("no console running (systemd unit inactive, no live pidfile)\n")
+				pids := scanConsolePids()
+				if len(pids) == 0 {
+					dimf("no console running (systemd unit inactive, no live pidfile)\n")
+					return nil
+				}
+				for _, p := range pids {
+					_ = syscall.Kill(p, syscall.SIGTERM)
+				}
+				okf("SIGTERM → console pid(s) %v (found by process scan — reinstall qfn to enable pidfile tracking)", pids)
 				return nil
 			}
 			if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
@@ -138,14 +146,32 @@ func serveRestartCmd(app *App) *cobra.Command {
 			if err != nil {
 				return err
 			}
+			logPath := app.StateDir() + "/serve.log"
+			_ = os.MkdirAll(app.StateDir(), 0o700)
+			lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
+			if err != nil {
+				return err
+			}
 			child := exec.Command(exe, "serve")
 			child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+			// /dev/null in, log file out — NEVER the caller's terminal: a
+			// detached child writing to a pty that closes when the parent
+			// exits dies of EIO on its first print (observed on the Spark).
+			child.Stdin = nil
+			child.Stdout = lf
+			child.Stderr = lf
 			if err := child.Start(); err != nil {
+				lf.Close()
 				return fmt.Errorf("respawn console: %w", err)
 			}
 			pid := child.Process.Pid
 			_ = child.Process.Release()
-			okf("console respawned detached (pid %d) — start it with output redirected if you want logs", pid)
+			_ = lf.Close()
+			time.Sleep(800 * time.Millisecond)
+			if err := syscall.Kill(pid, 0); err != nil {
+				return fmt.Errorf("console respawned but died immediately — see %s (a stale instance holding port %d is the usual cause)", logPath, app.Cfg.Serve.Port)
+			}
+			okf("console restarted (pid %d) — console log: %s", pid, logPath)
 			return nil
 		},
 	}
@@ -162,6 +188,8 @@ func serveStatusCmd(app *App) *cobra.Command {
 			default:
 				if pid, ok := readPid(app); ok {
 					fmt.Printf("  console: running standalone, pid %d\n", pid)
+				} else if pids := scanConsolePids(); len(pids) > 0 {
+					fmt.Printf("  console: running standalone, pid %v (pre-pidfile instance — `qfn serve restart` to upgrade tracking)\n", pids)
 				} else {
 					dimf("  console: not running — `qfn serve` (or `sudo qfn service install` for always-on)\n")
 				}
@@ -300,4 +328,40 @@ func (a *App) meta() map[string]any {
 		"exact_topk":   lu.Topk,
 		"serve_port":   a.Cfg.Serve.Port,
 	}
+}
+
+// scanConsolePids finds running `qfn serve` processes the slow way —
+// /proc cmdline — for instances started by an older binary (no pidfile).
+// Never matches the scanning process itself.
+func scanConsolePids() []int {
+	self := os.Getpid()
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return nil
+	}
+	var out []int
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		pid, err := strconv.Atoi(e.Name())
+		if err != nil || pid == self {
+			continue
+		}
+		b, err := os.ReadFile("/proc/" + e.Name() + "/cmdline")
+		if err != nil {
+			continue
+		}
+		args := strings.Split(string(b), "\x00")
+		if len(args) < 2 || filepath.Base(args[0]) != "qfn" {
+			continue
+		}
+		for _, a := range args[1:] {
+			if a == "serve" { // subcommands (serve stop etc.) exit instantly; the server is bare "serve"
+				out = append(out, pid)
+				break
+			}
+		}
+	}
+	return out
 }
