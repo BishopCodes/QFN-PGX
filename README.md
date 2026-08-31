@@ -5,20 +5,20 @@
 A PLE-mmap vLLM lane (weights stream from NVMe through the page cache, so a
 176B MoE fits one GB10's 128 GB unified pool), wrapped in an interactive CLI
 and an always-on web console. Born from
-[qwen3.8-Flash-DGX](https://github.com/BishopCodes/BishopCodes/qwen3.8-Flash-DGX)
+[qwen3.8-Flash-DGX](https://github.com/blazux/qwen3.8-Flash-DGX)
 plus the operational tricks from
-[dgx-spark-qwen38](https://github.com/BishopCodes/dgx-spark-qwen38) — the
+[dgx-spark-qwen38](https://github.com/hasso5703/dgx-spark-qwen38) — the
 keepalive proxy, memory guards, boot parsing, and the systemd machinery,
 rebuilt in Go with a fifth of the footprint (this box is already in swap just
 running the model; the console shouldn't add to it).
 
 ```
-$ qfn init          # defaults wizard → config.toml + age-encrypted password
-$ qfn build         # vendored Dockerfile → qwen38-flash-dgx image
-$ qfn pull          # ~122 GiB checkpoint into the HF cache (resumable)
-$ qfn up            # memory-guarded launch; boot in ~10 min
-$ qfn serve         # console + proxy on http://localhost:8799
-$ sudo qfn service install   # reboot-persistent: start the engine from the browser
+qfn init          # defaults wizard → config.toml + age-encrypted password
+qfn build         # vendored Dockerfile → qwen38-flash-dgx image
+qfn pull          # ~122 GiB checkpoint into the HF cache (resumable)
+qfn up            # memory-guarded launch; boot in ~10 min
+qfn serve         # console + proxy on http://localhost:8799
+sudo qfn service install   # reboot-persistent: start the engine from the browser
 ```
 
 ## What you get
