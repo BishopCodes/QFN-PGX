@@ -41,6 +41,11 @@ func addTools(root *cobra.Command, app *App) {
 				Status: func(e config.Engine) engine.Status { return engine.StatusOf(app.Locator(), e) },
 			}, quick)
 			checks = append(checks, doctor.ServiceState(c.Context())...)
+			if !quick {
+				if v := app.visionCheck(c.Context()); v != nil {
+					checks = append(checks, *v)
+				}
+			}
 			if asJSON {
 				b, _ := json.MarshalIndent(checks, "", "  ")
 				fmt.Println(string(b))
