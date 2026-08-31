@@ -16,6 +16,10 @@
 # The base image is multi-arch (arm64 for the Spark's Grace CPU). Pinned by digest
 # for reproducibility; bump the tag below if the upstream recipe moves.
 FROM vllm/vllm-openai:qwen38-flash-next@sha256:fc120ece0a388cc0aa1caad4a9f1cd92113484ab7ec2fd0efadd62585be05bf8
+# NOTE: as of 2026-08-31 this tag's digest IS the newest available. vLLM
+# merged Qwen3.8-Flash-Next multimodal support into main the same day
+# (#53896); this image predates that merge, so image INPUT rides the sglang
+# path until the tag is rebuilt. `qfn doctor` classifies which case applies.
 
 # Package layout inside the official image (vLLM 0.1.dev20073, torch 2.13 cu130,
 # numpy 2.2.6 — the patch needs numpy, already present).

@@ -87,7 +87,7 @@ func VisionCheck(ctx context.Context, d VisionDeps) Check {
 		c.Hint = "check the container start line in the engine logs"
 	case bodyHas(body, "not supported", "not a multimodal", "does not support", "no modality"):
 		c.Status, c.Msg = "bad", "engine BUILD predates multimodal support for this architecture"
-		c.Hint = "vLLM wired it upstream 2026-08-31 (#53896) — update the pinned base image and rebuild: `qfn build` (then `qfn up`)"
+		c.Hint = "vLLM merged it into main 2026-08-31 (#53896), but the official qwen38-flash-next image tag has NOT been rebuilt since (same digest) — nothing to update to yet. Watch the tag / rebuild when it moves; sglang carries the mm path today."
 	default:
 		c.Status, c.Msg = "warn", fmt.Sprintf("vision probe failed (HTTP %d): %s", status, firstLine(shorten(body)))
 		c.Hint = "engine's verbatim error above; run `qfn chat --image file.png \"describe\"` for a fuller probe"
