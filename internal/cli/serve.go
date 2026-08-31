@@ -38,9 +38,20 @@ func addServe(root *cobra.Command, app *App) {
 	cmd := &cobra.Command{
 		Use:   "serve",
 		Short: "Run the web console + proxy (foreground; systemd keeps it alive via `qfn service install`)",
-		RunE: func(c *cobra.Command, _ []string) error {
+		Args:  cobra.NoArgs, // without this, `qfn serve start` silently FOREGROUNDS the server
+		RunE: func(c *cobra.Command, args []string) error {
 			if err := firstRunGuard(app); err != nil {
 				return err
+			}
+			// A service-managed console already owns the port; running a
+			// second one by hand produces a baffling bind error — name the
+			// owner and the right command instead (INVOCATION_ID proves WE
+			// are the service when systemd launched us).
+			if systemdActive() && os.Getenv("INVOCATION_ID") == "" {
+				return fmt.Errorf("console is already running as a systemd service — `qfn serve restart` to reload it (or `sudo systemctl stop %s.service` to take over manually)", service.ServeUnit)
+			}
+			if pid, ok := readPid(app); ok {
+				return fmt.Errorf("console is already running (pid %d) — `qfn serve restart` to cycle it, `qfn serve stop` to end it", pid)
 			}
 			return runServe(c.Context(), app, portFlag, bindFlag, noProxy)
 		},
@@ -49,7 +60,7 @@ func addServe(root *cobra.Command, app *App) {
 	cmd.Flags().StringVar(&bindFlag, "bind", "", "override serve.bind")
 	cmd.Flags().BoolVar(&noProxy, "no-proxy", false, "console only; don't mount /v1")
 
-	cmd.AddCommand(serveStopCmd(app), serveRestartCmd(app), serveStatusCmd(app))
+	cmd.AddCommand(serveStartCmd(app), serveStopCmd(app), serveRestartCmd(app), serveStatusCmd(app))
 	root.AddCommand(cmd)
 }
 
@@ -86,8 +97,13 @@ func systemdActive() bool {
 }
 
 func systemctl(verb string) error {
-	if err := exec.Command("systemctl", verb, service.ServeUnit+".service").Run(); err != nil {
-		return fmt.Errorf("systemctl %s failed (try `sudo systemctl %s %s.service`): %w", verb, verb, service.ServeUnit, err)
+	unit := service.ServeUnit + ".service"
+	if err := exec.Command("systemctl", verb, unit).Run(); err == nil {
+		return nil
+	}
+	// System units need root: retry via sudo (it prompts on the terminal).
+	if err := exec.Command("sudo", "systemctl", verb, unit).Run(); err != nil {
+		return fmt.Errorf("systemctl %s %s failed even via sudo: %w", verb, unit, err)
 	}
 	return nil
 }
@@ -114,7 +130,7 @@ func serveStopCmd(app *App) *cobra.Command {
 				for _, p := range pids {
 					_ = syscall.Kill(p, syscall.SIGTERM)
 				}
-				okf("SIGTERM → console pid(s) %v (found by process scan — reinstall qfn to enable pidfile tracking)", pids)
+				okf("SIGTERM → console pid(s) %v (found by process scan)", pids)
 				return nil
 			}
 			if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
@@ -142,39 +158,74 @@ func serveRestartCmd(app *App) *cobra.Command {
 				_ = syscall.Kill(pid, syscall.SIGTERM)
 				time.Sleep(400 * time.Millisecond)
 			}
-			exe, err := os.Executable()
+			// /dev/null in, stateDir/serve.log out — never the caller's
+			// terminal (detached child + closed pty = EIO death; see 35134e7).
+			pid, logPath, err := respawnConsole(app)
 			if err != nil {
 				return err
-			}
-			logPath := app.StateDir() + "/serve.log"
-			_ = os.MkdirAll(app.StateDir(), 0o700)
-			lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
-			if err != nil {
-				return err
-			}
-			child := exec.Command(exe, "serve")
-			child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
-			// /dev/null in, log file out — NEVER the caller's terminal: a
-			// detached child writing to a pty that closes when the parent
-			// exits dies of EIO on its first print (observed on the Spark).
-			child.Stdin = nil
-			child.Stdout = lf
-			child.Stderr = lf
-			if err := child.Start(); err != nil {
-				lf.Close()
-				return fmt.Errorf("respawn console: %w", err)
-			}
-			pid := child.Process.Pid
-			_ = child.Process.Release()
-			_ = lf.Close()
-			time.Sleep(800 * time.Millisecond)
-			if err := syscall.Kill(pid, 0); err != nil {
-				return fmt.Errorf("console respawned but died immediately — see %s (a stale instance holding port %d is the usual cause)", logPath, app.Cfg.Serve.Port)
 			}
 			okf("console restarted (pid %d) — console log: %s", pid, logPath)
 			return nil
 		},
 	}
+}
+
+func serveStartCmd(app *App) *cobra.Command {
+	return &cobra.Command{
+		Use:   "start",
+		Short: "Start the console if it isn't running (systemd unit when installed)",
+		RunE: func(c *cobra.Command, _ []string) error {
+			if systemdActive() {
+				if err := systemctl("start"); err != nil {
+					return err
+				}
+				okf("console started via systemd")
+				return nil
+			}
+			if pid, ok := readPid(app); ok {
+				dimf("console already running (pid %d) — `qfn serve restart` to cycle it\n", pid)
+				return nil
+			}
+			pid, logPath, err := respawnConsole(app)
+			if err != nil {
+				return err
+			}
+			okf("console started (pid %d) — console log: %s", pid, logPath)
+			return nil
+		},
+	}
+}
+
+// respawnConsole starts a detached, log-redirected console and verifies it
+// survives past its first print. Never inherits the caller's terminal.
+func respawnConsole(app *App) (int, string, error) {
+	exe, err := os.Executable()
+	if err != nil {
+		return 0, "", err
+	}
+	logPath := app.StateDir() + "/serve.log"
+	_ = os.MkdirAll(app.StateDir(), 0o700)
+	lf, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o640)
+	if err != nil {
+		return 0, "", err
+	}
+	child := exec.Command(exe, "serve")
+	child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+	child.Stdin = nil
+	child.Stdout = lf
+	child.Stderr = lf
+	if err := child.Start(); err != nil {
+		lf.Close()
+		return 0, "", fmt.Errorf("spawn console: %w", err)
+	}
+	pid := child.Process.Pid
+	_ = child.Process.Release()
+	_ = lf.Close()
+	time.Sleep(800 * time.Millisecond)
+	if err := syscall.Kill(pid, 0); err != nil {
+		return 0, "", fmt.Errorf("console died on startup — see %s (a stale instance holding port %d is the usual cause)", logPath, app.Cfg.Serve.Port)
+	}
+	return pid, logPath, nil
 }
 
 func serveStatusCmd(app *App) *cobra.Command {
