@@ -9,6 +9,7 @@ package auth
 import (
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
@@ -45,6 +46,7 @@ type Payload struct {
 	PwHash    []byte `json:"pw_hash"`
 	EngineKey string `json:"engine_key,omitempty"` // vLLM --api-key when lockdown on
 	FrontKey  string `json:"front_key,omitempty"`  // optional machine bearer key for :8799 (rotate via qfn serve --rotate-key)
+	APIKeys   []APIKeyRec `json:"api_keys,omitempty"` // named machine keys (qfn keys add)
 	Version   int    `json:"v"`
 }
 
@@ -322,4 +324,122 @@ func (s *Store) RotateFrontKey() (string, error) {
 	}
 	p.FrontKey = k
 	return k, s.save(p)
+}
+
+// ---- named per-client API keys ------------------------------------------------
+//
+// One shared front key is great until you want to know WHO is hammering the
+// front door, or hand opencode a key you can revoke without rotating everyone
+// off. Named keys: the plaintext is shown once, only its SHA-256 is stored,
+// and requests through one get attributed by name in the request feed.
+
+// APIKeyRec is one named machine key (plaintext never stored).
+type APIKeyRec struct {
+	Name    string `json:"name"`
+	Hash    string `json:"hash"`    // hex(sha256(token))
+	Preview string `json:"preview"` // first 12 chars — enough to recognize, useless to steal
+	Created int64  `json:"created"` // unix seconds
+}
+
+var ErrKeyExists = errors.New("qfn: an API key with that name already exists")
+
+// AddAPIKey creates a named key; the plaintext is returned exactly once.
+func (s *Store) AddAPIKey(name string) (string, error) {
+	if !validKeyName(name) {
+		return "", errors.New("qfn: key name must be 1-32 chars of letters, digits, '-' or '_'")
+	}
+	p, err := s.load()
+	if err != nil {
+		if !errors.Is(err, ErrNoCredentials) {
+			return "", err
+		}
+		p = &Payload{Version: 1}
+	}
+	for _, k := range p.APIKeys {
+		if k.Name == name {
+			return "", ErrKeyExists
+		}
+	}
+	tok, err := randomHex(20)
+	if err != nil {
+		return "", err
+	}
+	tok = "qfn_" + tok
+	sum := sha256.Sum256([]byte(tok))
+	p.APIKeys = append(p.APIKeys, APIKeyRec{
+		Name: name, Hash: hex.EncodeToString(sum[:]),
+		Preview: tok[:12] + "…", Created: s.now().Unix(),
+	})
+	return tok, s.save(p)
+}
+
+// ListAPIKeys returns metadata only — hashes are dropped.
+func (s *Store) ListAPIKeys() ([]APIKeyRec, error) {
+	p, err := s.load()
+	if err != nil {
+		if errors.Is(err, ErrNoCredentials) {
+			return nil, nil
+		}
+		return nil, err
+	}
+	out := make([]APIKeyRec, 0, len(p.APIKeys))
+	for _, k := range p.APIKeys {
+		k.Hash = ""
+		out = append(out, k)
+	}
+	return out, nil
+}
+
+// RevokeAPIKey removes a named key. Revoke is immediate on the next request
+// (the store hot-reloads); nothing to restart.
+func (s *Store) RevokeAPIKey(name string) error {
+	p, err := s.load()
+	if err != nil {
+		return err
+	}
+	out := p.APIKeys[:0]
+	found := false
+	for _, k := range p.APIKeys {
+		if k.Name == name {
+			found = true
+			continue
+		}
+		out = append(out, k)
+	}
+	if !found {
+		return fmt.Errorf("qfn: no API key named %q (`qfn keys list`)", name)
+	}
+	p.APIKeys = out
+	return s.save(p)
+}
+
+// MatchAPIKey resolves a bearer token to its key name ("" + false if none).
+func (s *Store) MatchAPIKey(token string) (string, bool) {
+	if token == "" {
+		return "", false
+	}
+	p, err := s.load()
+	if err != nil {
+		return "", false
+	}
+	sum := sha256.Sum256([]byte(token))
+	want := hex.EncodeToString(sum[:])
+	for _, k := range p.APIKeys {
+		if subtle.ConstantTimeCompare([]byte(k.Hash), []byte(want)) == 1 {
+			return k.Name, true
+		}
+	}
+	return "", false
+}
+
+func validKeyName(n string) bool {
+	if n == "" || len(n) > 32 {
+		return false
+	}
+	for _, r := range n {
+		if !(r == '-' || r == '_' || (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')) {
+			return false
+		}
+	}
+	return true
 }

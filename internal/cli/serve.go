@@ -8,6 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -20,6 +26,7 @@ import (
 	"github.com/BishopCodes/qfn-pgx/internal/profiles"
 	"github.com/BishopCodes/qfn-pgx/internal/proxy"
 	"github.com/BishopCodes/qfn-pgx/internal/server"
+	"github.com/BishopCodes/qfn-pgx/internal/service"
 )
 
 func addServe(root *cobra.Command, app *App) {
@@ -41,8 +48,130 @@ func addServe(root *cobra.Command, app *App) {
 	cmd.Flags().IntVar(&portFlag, "port", 0, "override serve.port")
 	cmd.Flags().StringVar(&bindFlag, "bind", "", "override serve.bind")
 	cmd.Flags().BoolVar(&noProxy, "no-proxy", false, "console only; don't mount /v1")
+
+	cmd.AddCommand(serveStopCmd(app), serveRestartCmd(app), serveStatusCmd(app))
 	root.AddCommand(cmd)
 }
+
+// ---- console stop / restart / status ----
+//
+// Same story as the web "Restart console" button: if the systemd unit is
+// active, systemctl is authoritative (and survives logout); otherwise we use
+// the pidfile that every `qfn serve` writes next to its state.
+
+func pidPath(app *App) string { return app.StateDir() + "/serve.pid" }
+
+func writePidfile(app *App) {
+	_ = os.MkdirAll(filepath.Dir(pidPath(app)), 0o700)
+	_ = os.WriteFile(pidPath(app), []byte(strconv.Itoa(os.Getpid())), 0o644)
+}
+
+func readPid(app *App) (int, bool) {
+	b, err := os.ReadFile(pidPath(app))
+	if err != nil {
+		return 0, false
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil || pid <= 0 {
+		return 0, false
+	}
+	if err := syscall.Kill(pid, 0); err != nil {
+		return 0, false
+	}
+	return pid, true
+}
+
+func systemdActive() bool {
+	return exec.Command("systemctl", "is-active", "--quiet", service.ServeUnit+".service").Run() == nil
+}
+
+func systemctl(verb string) error {
+	if err := exec.Command("systemctl", verb, service.ServeUnit+".service").Run(); err != nil {
+		return fmt.Errorf("systemctl %s failed (try `sudo systemctl %s %s.service`): %w", verb, verb, service.ServeUnit, err)
+	}
+	return nil
+}
+
+func serveStopCmd(app *App) *cobra.Command {
+	return &cobra.Command{
+		Use:   "stop",
+		Short: "Stop the running web console (systemd-aware, pidfile fallback)",
+		RunE: func(c *cobra.Command, _ []string) error {
+			if systemdActive() {
+				if err := systemctl("stop"); err != nil {
+					return err
+				}
+				okf("console stopped (systemd)")
+				return nil
+			}
+			pid, ok := readPid(app)
+			if !ok {
+				dimf("no console running (systemd unit inactive, no live pidfile)\n")
+				return nil
+			}
+			if err := syscall.Kill(pid, syscall.SIGTERM); err != nil {
+				return err
+			}
+			okf("SIGTERM → console pid %d", pid)
+			return nil
+		},
+	}
+}
+
+func serveRestartCmd(app *App) *cobra.Command {
+	return &cobra.Command{
+		Use:   "restart",
+		Short: "Restart the console — picks up a newly installed qfn binary",
+		RunE: func(c *cobra.Command, _ []string) error {
+			if systemdActive() {
+				if err := systemctl("restart"); err != nil {
+					return err
+				}
+				okf("console restarted by systemd — now running %s", Version())
+				return nil
+			}
+			if pid, ok := readPid(app); ok {
+				_ = syscall.Kill(pid, syscall.SIGTERM)
+				time.Sleep(400 * time.Millisecond)
+			}
+			exe, err := os.Executable()
+			if err != nil {
+				return err
+			}
+			child := exec.Command(exe, "serve")
+			child.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+			if err := child.Start(); err != nil {
+				return fmt.Errorf("respawn console: %w", err)
+			}
+			pid := child.Process.Pid
+			_ = child.Process.Release()
+			okf("console respawned detached (pid %d) — start it with output redirected if you want logs", pid)
+			return nil
+		},
+	}
+}
+
+func serveStatusCmd(app *App) *cobra.Command {
+	return &cobra.Command{
+		Use:   "status",
+		Short: "Is the console running, and how?",
+		RunE: func(c *cobra.Command, _ []string) error {
+			switch {
+			case systemdActive():
+				fmt.Printf("  console: %s (systemd unit, %s)\n", okStr(), Version())
+			default:
+				if pid, ok := readPid(app); ok {
+					fmt.Printf("  console: running standalone, pid %d\n", pid)
+				} else {
+					dimf("  console: not running — `qfn serve` (or `sudo qfn service install` for always-on)\n")
+				}
+			}
+			return nil
+		},
+	}
+}
+
+func okStr() string { return "up" }
 
 func runServe(ctx context.Context, app *App, port int, bind string, noProxy bool) error {
 	// Hot-reload source: every dependency reads config fresh per call.
@@ -147,6 +276,8 @@ func runServe(ctx context.Context, app *App, port int, bind string, noProxy bool
 		defer cancel()
 		_ = httpSrv.Shutdown(shutCtx)
 	}()
+	writePidfile(app)
+	defer os.Remove(pidPath(app))
 	fmt.Printf("qfn console on http://%s (auth: password, sessions wiped on restart)\n", httpSrv.Addr)
 	if proxyHandler != nil {
 		fmt.Printf("        proxy /v1 → %s (lockdown key %v)\n", base(), app.Cfg.Engine.Lockdown)

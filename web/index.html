@@ -6,68 +6,179 @@
 <title>QFN-PGX · Qwen3.8-Flash-Next on one Spark</title>
 <link rel="stylesheet" href="/style.css">
 </head>
-<body>
-<div id="login" class="login hidden">
-  <form id="login-form" class="card">
-    <h1>QFN-PGX</h1>
-    <p class="sub">Qwen3.8-Flash-Next · one DGX Spark</p>
-    <input id="pw" type="password" placeholder="console password" autocomplete="current-password" autofocus>
-    <button type="submit">Unlock</button>
-    <div id="login-err" class="err"></div>
+<body class="bg-ink text-slate-300 text-sm antialiased">
+
+<div id="login" class="hidden fixed inset-0 bg-ink/95 z-50 grid place-items-center">
+  <form id="login-form" class="panel w-80 flex flex-col gap-3">
+    <div class="text-accent font-semibold">QFN-PGX console</div>
+    <p class="text-xs text-slate-500">The password you set with <code class="text-slate-400">qfn init</code>. Wrong passwords lock the IP briefly.</p>
+    <input id="pw" type="password" autocomplete="current-password" placeholder="console password"
+           class="bg-ink border border-edge rounded px-2.5 py-1.5 text-slate-200 focus:border-accent outline-none">
+    <button type="submit" class="btn text-center">Unlock</button>
+    <div id="login-err" class="text-bad text-xs"></div>
   </form>
 </div>
 
-<main id="app" class="hidden">
-  <header>
-    <div class="brand">QFN&#8209;PGX</div>
-    <div id="banner" class="banner"></div>
-    <div class="hright">
-      <span id="clock" class="dim"></span>
-      <button id="logout" class="ghost">sign out</button>
-    </div>
+<div id="app" class="hidden">
+  <header class="flex items-center gap-3 px-4 h-12 border-b border-edge bg-panel/60 sticky top-0 z-40 backdrop-blur">
+    <span class="text-accent font-semibold tracking-wide">QFN-PGX</span>
+    <span id="pill-engine" class="pill pill-down"><i class="w-1.5 h-1.5 rounded-full bg-current"></i><span id="engine-state">engine: —</span></span>
+    <span id="pill-pressure" class="pill pill-up" data-help="backpressure">nominal</span>
+    <span id="op-status" class="text-xs text-slate-500 truncate"></span>
+    <span class="flex-1"></span>
+    <span id="clock" class="font-mono text-xs text-slate-500"></span>
+    <button id="btn-help" class="btn" title="What am I looking at?">? help</button>
+    <button id="btn-restart-console" class="btn" data-help="restart-console">↻ console</button>
+    <button id="logout" class="btn">sign out</button>
   </header>
 
-  <section id="controls" class="controls">
-    <div id="engine-state" class="pill">…</div>
-    <select id="profile" title="launch profile"></select>
-    <button id="btn-up">▲ start engine</button>
-    <button id="btn-restart">⟳ restart</button>
-    <button id="btn-down" class="danger">■ stop</button>
-    <span id="op-status" class="dim"></span>
-  </section>
+  <main class="p-4 grid grid-cols-12 gap-4 max-w-[1400px] mx-auto">
 
-  <section class="grid">
-    <div class="panel" id="p-model">
-      <h2>model</h2>
-      <div id="model-body" class="kv">…</div>
-    </div>
-    <div class="panel" id="p-perf">
-      <h2>performance</h2>
-      <div id="perf-body" class="kv">…</div>
-      <canvas id="perf-canvas" width="560" height="88"></canvas>
-    </div>
-    <div class="panel" id="p-requests">
-      <h2>requests</h2>
-      <div class="counts"><span id="req-counts">…</span></div>
-      <div id="req-table" class="tbl"></div>
-    </div>
-    <div class="panel" id="p-system">
-      <h2>system <span class="dim">· unified pool</span></h2>
-      <div class="bar-label">memory</div><div class="bar"><div id="bar-mem"></div></div>
-      <div class="bar-label">swap</div><div class="bar swap"><div id="bar-swap"></div></div>
-      <div id="psi" class="psi"></div>
-      <div class="bar-label">cpus</div>
-      <div id="cores" class="cores"></div>
-      <div id="sys-kv" class="kv">…</div>
-    </div>
-    <div class="panel wide" id="p-logs">
-      <h2>engine log <span class="dim">· boot progress</span></h2>
-      <pre id="logs"></pre>
-    </div>
-  </section>
-</main>
+    <!-- ENGINE -->
+    <section class="panel col-span-12 lg:col-span-4 xl:col-span-3">
+      <div class="ptitle">Engine <button class="help" data-help="engine">?</button></div>
+      <div id="boot-wrap" class="hidden mb-3">
+        <div class="flex justify-between text-xs mb-1">
+          <span id="boot-phase" class="text-warn">booting…</span>
+          <span id="boot-eta" class="text-slate-500"></span>
+        </div>
+        <div class="meter"><i id="boot-bar" style="width:3%; background:#f0b429"></i></div>
+        <div id="boot-detail" class="text-[11px] text-slate-500 mt-1 font-mono"></div>
+      </div>
+      <div class="flex flex-wrap gap-2 mb-3">
+        <button id="btn-up" class="btn" data-help="engine-buttons">▶ start</button>
+        <button id="btn-restart" class="btn" data-help="engine-buttons">↻ restart</button>
+        <button id="btn-down" class="btn btn-bad" data-help="engine-buttons">■ stop</button>
+        <select id="profile" class="btn" style="width:auto" data-help="profiles" title="launch profile: a saved engine configuration"></select>
+      </div>
+      <dl id="model-body" class="min-w-0"></dl>
+      <div id="keys-line" class="text-[11px] text-slate-500 mt-2" data-help="keys"></div>
+    </section>
 
-<script src="/login.js" defer></script>
-<script src="/app.js" defer></script>
+    <!-- PERFORMANCE -->
+    <section class="panel col-span-12 lg:col-span-8 xl:col-span-5">
+      <div class="ptitle">Performance <button class="help" data-help="perf">?</button></div>
+      <div class="grid grid-cols-4 gap-3 mb-2">
+        <div><div class="text-slate-500 text-[11px]">decode</div><div id="kv-gen" class="font-mono text-lg text-good">—</div><div class="text-[10px] text-slate-600">tok/s out</div></div>
+        <div><div class="text-slate-500 text-[11px]">prefill</div><div id="kv-prefill" class="font-mono text-lg text-accent">—</div><div class="text-[10px] text-slate-600">tok/s in</div></div>
+        <div><div class="text-slate-500 text-[11px]">KV cache</div><div id="kv-usage" class="font-mono text-lg text-warn">—</div><div class="text-[10px] text-slate-600">% of pool</div></div>
+        <div><div class="text-slate-500 text-[11px]">prefix hit</div><div id="kv-prefix" class="font-mono text-lg text-slate-200">—</div><div class="text-[10px] text-slate-600">reuse window</div></div>
+      </div>
+      <div id="chart-perf" data-help="chart"></div>
+      <div id="perf-extra" class="grid grid-cols-2 gap-x-6 mt-1"></div>
+    </section>
+
+    <!-- SYSTEM -->
+    <section class="panel col-span-12 lg:col-span-6 xl:col-span-4">
+      <div class="ptitle">System — 128 GB unified pool <button class="help" data-help="system">?</button></div>
+      <div class="mb-2">
+        <div class="flex justify-between text-xs mb-0.5"><span class="text-slate-500">memory</span><span id="mem-text" class="font-mono">— of —</span></div>
+        <div class="meter"><i id="bar-mem"></i></div>
+      </div>
+      <div class="mb-2">
+        <div class="flex justify-between text-xs mb-0.5"><span class="text-slate-500">swap <span class="text-[10px] text-slate-600">(the number that ruins your day)</span></span><span id="swap-text" class="font-mono">— of —</span></div>
+        <div class="meter"><i id="bar-swap" style="background:#f0b429"></i></div>
+      </div>
+      <div class="flex items-center gap-2 mb-2">
+        <span class="text-slate-500 text-xs">cpu</span>
+        <div id="cores" class="flex-1 flex items-end gap-px h-6"></div>
+        <span id="load-text" class="font-mono text-xs text-slate-400"></span>
+      </div>
+      <div id="psi" class="flex gap-2 mb-2"></div>
+      <dl id="sys-kv" class="min-w-0"></dl>
+    </section>
+
+    <!-- REQUESTS -->
+    <section class="panel col-span-12 lg:col-span-6 xl:col-span-8">
+      <div class="ptitle">Requests <span id="req-counts" class="normal-case tracking-normal text-slate-500"></span><span class="flex-1"></span><button class="help" data-help="requests">?</button></div>
+      <div class="overflow-x-auto">
+      <table class="w-full table-fixed text-xs">
+        <thead><tr class="text-left text-slate-500 border-b border-edge">
+          <th class="w-10 py-1 font-normal">#</th><th class="w-24 font-normal">phase</th>
+          <th class="w-14 font-normal">kind</th><th class="w-16 text-right font-normal">out</th>
+          <th class="w-16 text-right font-normal">in</th><th class="w-20 text-right font-normal">tok/s</th>
+          <th class="font-normal">model · client</th>
+        </tr></thead>
+        <tbody id="req-table"></tbody>
+      </table>
+      </div>
+      <div class="text-[11px] text-slate-600 mt-1">click any row for per-request timing</div>
+    </section>
+
+    <!-- LOGS -->
+    <section class="panel col-span-12 xl:col-span-4 lg:col-span-12 flex flex-col">
+      <div class="ptitle">Engine logs <span class="flex-1"></span>
+        <button id="btn-follow" class="btn !py-0 mr-1" data-help="logs">following</button>
+        <button class="help" data-help="logs">?</button>
+      </div>
+      <pre id="logs" class="flex-1 min-h-[220px] max-h-[45vh] overflow-y-auto font-mono text-[11px] leading-relaxed text-slate-400 whitespace-pre-wrap break-all bg-ink/60 rounded p-2"></pre>
+      <button id="btn-jump" class="btn hidden self-end mt-1">jump to latest ↓</button>
+    </section>
+
+    <!-- PLAYGROUND -->
+    <section class="panel col-span-12" id="playground">
+      <div class="ptitle">Playground — test the model with different settings <button class="help" data-help="playground">?</button></div>
+      <div class="grid grid-cols-12 gap-4">
+        <div class="col-span-12 lg:col-span-4 flex flex-col gap-2">
+          <label class="text-xs text-slate-500">preset
+            <select id="pg-preset" class="btn block w-full mt-1">
+              <option value="defaults">engine defaults (from checkpoint)</option>
+              <option value="deterministic">deterministic (temp 0)</option>
+              <option value="creative">creative (temp 1.0, top_p 0.95)</option>
+              <option value="fast">fast draft (max 64, no thinking)</option>
+            </select>
+          </label>
+          <label class="text-xs text-slate-500">system prompt
+            <textarea id="pg-system" rows="2" class="block w-full mt-1 bg-ink border border-edge rounded px-2 py-1 text-slate-300 focus:border-accent outline-none" placeholder="optional"></textarea>
+          </label>
+          <div class="grid grid-cols-3 gap-2">
+            <label class="text-xs text-slate-500">temp
+              <select id="pg-temp" class="btn block w-full mt-1"><option value="">default</option><option>0</option><option>0.3</option><option>0.6</option><option>0.8</option><option>1</option></select>
+            </label>
+            <label class="text-xs text-slate-500">top_p
+              <select id="pg-topp" class="btn block w-full mt-1"><option value="">default</option><option>0.8</option><option>0.9</option><option>0.95</option><option>1</option></select>
+            </label>
+            <label class="text-xs text-slate-500">max tokens
+              <select id="pg-maxtok" class="btn block w-full mt-1"><option value="">default</option><option>64</option><option>256</option><option>1024</option><option>4096</option></select>
+            </label>
+          </div>
+          <label class="flex items-center gap-2 text-xs text-slate-500">
+            <input id="pg-think" type="checkbox" checked class="accent-[#4cc2ff]"> thinking mode
+            <span class="text-slate-600">(reasons before answering — slower, better)</span>
+          </label>
+          <div class="flex gap-2 mt-1">
+            <button id="btn-send" class="btn flex-1">Send ▸</button>
+            <button id="btn-stop" class="btn btn-bad hidden">■ stop</button>
+            <button id="pg-clear" class="btn">clear</button>
+          </div>
+        </div>
+        <div class="col-span-12 lg:col-span-8 flex flex-col min-w-0">
+          <textarea id="pg-msg" rows="3" placeholder="Ask the model anything… (Ctrl+Enter sends)"
+            class="w-full bg-ink border border-edge rounded px-2 py-1.5 text-slate-200 focus:border-accent outline-none resize-y"></textarea>
+          <pre id="pg-out" class="flex-1 min-h-[160px] max-h-[50vh] overflow-y-auto mt-2 bg-ink/60 rounded p-2 font-mono text-xs whitespace-pre-wrap break-words text-slate-300"></pre>
+          <div id="pg-stats" class="text-[11px] text-slate-500 mt-1 font-mono"></div>
+        </div>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="req-modal" class="hidden fixed inset-0 bg-ink/80 z-50 grid place-items-center">
+  <div class="panel w-[480px] max-w-[92vw]">
+    <div class="flex items-center justify-between mb-2"><span class="text-accent font-semibold">Request <span id="req-modal-id"></span></span><button id="req-modal-close" class="btn">close</button></div>
+    <dl id="req-modal-body"></dl>
+  </div>
+</div>
+
+<div id="help-modal" class="hidden fixed inset-0 bg-ink/80 z-50 grid place-items-center overflow-y-auto">
+  <div class="panel w-[640px] max-w-[92vw] my-8">
+    <div class="flex items-center justify-between mb-3"><span class="text-accent font-semibold">What am I looking at?</span><button id="help-close" class="btn">close</button></div>
+    <div id="help-body" class="text-xs leading-relaxed text-slate-400 space-y-4"></div>
+  </div>
+</div>
+
+<script src="/vendor/tanstack-charts.iife.js"></script>
+<script src="/app.js"></script>
+<script src="/login.js"></script>
 </body>
 </html>

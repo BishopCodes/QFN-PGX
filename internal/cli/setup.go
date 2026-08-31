@@ -4,6 +4,7 @@ package cli
 // lockdown keys, systemd service management.
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
 	"os"
@@ -19,16 +20,40 @@ import (
 
 func addSetup(root *cobra.Command, app *App) {
 	// ---- init ----
-	root.AddCommand(&cobra.Command{
+	var (
+		flagDefaults bool
+		flagPwStdin  bool
+	)
+	cmdInit := &cobra.Command{
 		Use:   "init",
 		Short: "First-run setup wizard (walks defaults, sets the console password)",
-		Args:  cobra.NoArgs,
+		Long: `First-run setup. Interactively it's the guided wizard; unattended it's:
+
+  echo 'my-pass' | qfn init --defaults --password-stdin
+
+--defaults takes built-in defaults (port 8799, nvfp4, lockdown on, 262144 ctx)
+— everything stays editable later with `+"`qfn config set`"+`.`,
+		Args: cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
 			if app.Cfg.Meta.FirstRunDone {
 				return errors.New("already configured — use `qfn config` to edit (or `qfn config reset` first)")
 			}
+			if flagDefaults {
+				out := app.Cfg
+				pw, err := stdinPassword(flagPwStdin)
+				if err != nil {
+					return err
+				}
+				out.Meta.FirstRunDone = true
+				if err := Persist(out, pw); err != nil {
+					return err
+				}
+				okf("configured with defaults at %s (change anything with `qfn config set`)", config.Path())
+				dimf("next: qfn pull · qfn build · qfn up — or sudo qfn service install for always-on\n")
+				return nil
+			}
 			if !isTTY() {
-				return errors.New("init needs a terminal (or edit " + config.Path() + " by hand)")
+				return errors.New("init needs a terminal — or `qfn init --defaults --password-stdin` unattended")
 			}
 			out, pw, err := Wizard(app.Cfg, false)
 			if err != nil {
@@ -50,7 +75,10 @@ func addSetup(root *cobra.Command, app *App) {
 			dimf("always-on console: `qfn service install` — then start/stop the engine from the browser")
 			return nil
 		},
-	})
+	}
+	cmdInit.Flags().BoolVar(&flagDefaults, "defaults", false, "use built-in defaults; no wizard")
+	cmdInit.Flags().BoolVar(&flagPwStdin, "password-stdin", false, "read the console password from stdin (first non-empty line)")
+	root.AddCommand(cmdInit)
 
 	// ---- config ----
 	cfgCmd := &cobra.Command{
@@ -481,4 +509,36 @@ func parseBool(v string) (bool, error) {
 		return false, nil
 	}
 	return false, fmt.Errorf("not a boolean: %q", v)
+}
+
+// stdinPassword: unattended password intake. With fromStdin, the first
+// non-empty stdin line is the password (Ansible-friendly); otherwise it asks
+// twice on a terminal.
+func stdinPassword(fromStdin bool) (string, error) {
+	if fromStdin {
+		sc := bufio.NewScanner(os.Stdin)
+		for sc.Scan() {
+			line := strings.TrimSpace(sc.Text())
+			if line == "" {
+				continue
+			}
+			if len(line) < 8 {
+				return "", errors.New("password must be at least 8 characters")
+			}
+			return line, nil
+		}
+		return "", errors.New("empty stdin — pipe the password: `echo pw | qfn init --defaults --password-stdin`")
+	}
+	pw, err := AskPassword("console password (8+ chars)", 8)
+	if err != nil {
+		return "", err
+	}
+	twice, err := AskPassword("repeat it", 8)
+	if err != nil {
+		return "", err
+	}
+	if pw != twice {
+		return "", errors.New("passwords differ — init aborted")
+	}
+	return pw, nil
 }

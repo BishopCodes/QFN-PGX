@@ -14,6 +14,8 @@ import (
 	"os"
 	"strings"
 	"time"
+
+	"golang.org/x/term"
 )
 
 // Options configure one session.
@@ -75,6 +77,14 @@ func (s *Session) Send(ctx context.Context, text string, out io.Writer) (string,
 		return "", err
 	}
 	defer resp.Body.Close()
+
+	// Pre-first-token silence on a cold prompt can run seconds — give the
+	// user evidence of life (and elapsed time) until real tokens arrive.
+	spinnerDone := make(chan struct{})
+	defer close(spinnerDone)
+	if isTTY(out) {
+		go spin(out, spinnerDone, start)
+	}
 	if resp.StatusCode >= 400 {
 		msg, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 		s.popUser()
@@ -116,6 +126,7 @@ func (s *Session) Send(ctx context.Context, text string, out io.Writer) (string,
 			if !firstSet {
 				ttft = time.Since(start)
 				firstSet = true
+				select { case <-spinnerDone: default: close(spinnerDone) } // stop spinner, clear line
 			}
 			tokens++
 			sb.WriteString(c.Delta.Content)
@@ -137,6 +148,29 @@ func (s *Session) Send(ctx context.Context, text string, out io.Writer) (string,
 	return sb.String(), sc.Err()
 }
 
+// spin animates a braille spinner + elapsed clock until done closes.
+func spin(out io.Writer, done <-chan struct{}, start time.Time) {
+	frames := []rune("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+	t := time.NewTicker(90 * time.Millisecond)
+	defer t.Stop()
+	i := 0
+	for {
+		select {
+		case <-done:
+			_, _ = io.WriteString(out, "\r\x1b[2K")
+			return
+		case <-t.C:
+			el := time.Since(start).Truncate(time.Second)
+			_, _ = io.WriteString(out, fmt.Sprintf("\r\x1b[2K  %c thinking… %s since send", frames[i%len(frames)], el))
+			i++
+		}
+	}
+}
+
+func isTTY(w io.Writer) bool {
+	f, ok := w.(*os.File)
+	return ok && term.IsTerminal(int(f.Fd()))
+}
 func (s *Session) popUser() {
 	if len(s.messages) > 0 {
 		s.messages = s.messages[:len(s.messages)-1]

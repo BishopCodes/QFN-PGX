@@ -5,7 +5,6 @@
 package server
 
 import (
-	"bufio"
 	"context"
 	"crypto/subtle"
 	"encoding/json"
@@ -15,7 +14,10 @@ import (
 	"io/fs"
 	"net"
 	"net/http"
+	"os"
+	"os/exec"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/BishopCodes/qfn-pgx/internal/auth"
@@ -45,19 +47,25 @@ type Deps struct {
 	Locator         func() engine.SnapshotLocator
 	Preflight       func(ctx context.Context, e config.Engine) error
 	Meta            func() map[string]any
+	// NoLogPump disables the background docker-logs pump (tests assert on
+	// exact docker invocations; the pump would race them). Never set in prod.
+	NoLogPump     bool
 	Version         string
 	CookieName      string
 }
 
 type Server struct {
 	deps Deps
+	bus  *logBus
 }
 
 func New(d Deps) *Server {
 	if d.CookieName == "" {
 		d.CookieName = "qfn_session"
 	}
-	return &Server{deps: d}
+	s := &Server{deps: d}
+	s.bus = newLogBus(d.Manager, func() string { return d.Cfg().Engine.Name })
+	return s
 }
 
 // Handler builds the route table (Go 1.22 method-patterns in net/http).
@@ -75,6 +83,12 @@ func (s *Server) Handler() http.Handler {
 	mux.Handle("POST /api/engine/up", s.auth(http.HandlerFunc(s.hEngineUp)))
 	mux.Handle("POST /api/engine/restart", s.auth(http.HandlerFunc(s.hEngineRestart)))
 	mux.Handle("POST /api/engine/down", s.auth(http.HandlerFunc(s.hEngineDown)))
+	mux.Handle("POST /api/console/restart", s.auth(http.HandlerFunc(s.hConsoleRestart)))
+
+	// ONE log pump for the whole process (see logbus.go).
+	if !s.deps.NoLogPump {
+		s.bus.start(context.Background())
+	}
 
 	if s.deps.Proxy != nil {
 		mux.Handle("POST /v1/", s.auth(s.deps.Proxy))
@@ -104,6 +118,7 @@ const authedKey authed = iota
 func (s *Server) auth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		cfg := s.deps.Cfg()
+		r.Header.Del("X-Qfn-Client") // attribution is ours to assign, never the caller's
 		if !cfg.Serve.AuthEnabled {
 			next.ServeHTTP(w, r)
 			return
@@ -118,6 +133,14 @@ func (s *Server) auth(next http.Handler) http.Handler {
 		if tok := bearer(r); tok != "" {
 			if fk, err := s.deps.Store.FrontKey(); err == nil && fk != "" &&
 				subtle.ConstantTimeCompare([]byte(tok), []byte(fk)) == 1 {
+				r.Header.Set("X-Qfn-Client", "front-key")
+				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), authedKey, true)))
+				return
+			}
+			// Named machine keys (qfn keys add): revocable individually and
+			// attributed by name in the request feed.
+			if name, ok := s.deps.Store.MatchAPIKey(tok); ok {
+				r.Header.Set("X-Qfn-Client", name)
 				next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), authedKey, true)))
 				return
 			}
@@ -226,6 +249,11 @@ func (s *Server) hState(w http.ResponseWriter, r *http.Request) {
 	if op, ok := s.deps.Manager.LastOp(); ok {
 		resp["op"] = op
 	}
+	status, _ := s.bus.snapshot()
+	resp["status"] = status
+	if keys, err := s.deps.Store.ListAPIKeys(); err == nil && len(keys) > 0 {
+		resp["keys"] = keys
+	}
 	writeJSON(w, http.StatusOK, resp)
 }
 
@@ -243,13 +271,18 @@ func (s *Server) hEvents(w http.ResponseWriter, r *http.Request) {
 	snapCh, unsubSnap := s.deps.Collector.Subscribe()
 	reqCh, unsubReq := s.deps.Registry.Subscribe()
 	opCh, unsubOp := s.deps.Manager.Subscribe()
+	curStatus, unsubStatus, statusCh := s.bus.subscribeStatus()
 	defer unsubSnap()
 	defer unsubReq()
 	defer unsubOp()
+	defer unsubStatus()
 
 	ctx := r.Context()
 	tick := time.NewTicker(15 * time.Second) // SSE comment keep-warm
 	defer tick.Stop()
+	eta := s.bus.statusTicker() // ETA refresh while booting
+	defer eta.Stop()
+	sse(w, fl, "status", curStatus)
 	for {
 		select {
 		case <-ctx.Done():
@@ -257,12 +290,19 @@ func (s *Server) hEvents(w http.ResponseWriter, r *http.Request) {
 		case <-tick.C:
 			_, _ = io.WriteString(w, ": warm\n\n")
 			fl.Flush()
+		case <-eta.C:
+			st, _ := s.bus.snapshot()
+			if st.Pct > 0 && st.Pct < 100 {
+				sse(w, fl, "status", st) // boot ETA moves with time
+			}
 		case snap := <-snapCh:
 			sse(w, fl, "snapshot", snap)
 		case <-reqCh:
 			sse(w, fl, "requests", s.rowsWithTPS())
 		case ev := <-opCh:
 			sse(w, fl, "ops", ev)
+		case st := <-statusCh:
+			sse(w, fl, "status", st)
 		}
 	}
 }
@@ -400,28 +440,62 @@ func (s *Server) hEngineStatus(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) hEngineLogs(w http.ResponseWriter, r *http.Request) {
-	cfg := s.deps.Cfg()
 	fl, ok := w.(http.Flusher)
 	if !ok {
 		writeErr(w, http.StatusInternalServerError, "no flusher")
 		return
 	}
 	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
 	w.WriteHeader(http.StatusOK)
 	fl.Flush()
 
-	// Frame raw log bytes into SSE data: events line by line.
-	pr, pw := io.Pipe()
-	go func() {
-		_ = s.deps.Manager.Logs(r.Context(), cfg.Engine.Name, pw)
-		_ = pw.Close()
-	}()
-	sc := bufio.NewScanner(pr)
-	sc.Buffer(make([]byte, 0, 64*1024), 512*1024)
-	for sc.Scan() {
-		fmt.Fprintf(w, "data: %s\n\n", sc.Bytes())
-		fl.Flush()
+	replay, unsub, ch := s.bus.subscribe()
+	defer unsub()
+	if len(replay) > 0 {
+		sse(w, fl, "replay", replay) // ONE batched event, not N
 	}
+	ctx := r.Context()
+	tick := time.NewTicker(15 * time.Second)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			_, _ = io.WriteString(w, ": warm\n\n") // engine-down stays quiet, no reconnect storm
+			fl.Flush()
+		case line := <-ch:
+			fmt.Fprintf(w, "data: %s\n\n", line)
+			fl.Flush()
+		}
+	}
+}
+
+// hConsoleRestart lets the browser (or CLI) reload the console onto a newly
+// installed binary: under systemd we exit and Restart=always brings us back;
+// standalone we respawn detached first. Session auth required (auth wraps it).
+func (s *Server) hConsoleRestart(w http.ResponseWriter, r *http.Request) {
+	under := os.Getenv("INVOCATION_ID") != ""
+	writeJSON(w, http.StatusAccepted, map[string]any{"restart_in_ms": 400, "mode": restartMode(under)})
+	go func() {
+		time.Sleep(400 * time.Millisecond) // let the response flush
+		consoleRestart(under)
+	}()
+}
+
+// consoleRestart is a var so tests never os.Exit the test binary.
+var consoleRestart = defaultConsoleRestart
+
+func defaultConsoleRestart(underSystemd bool) {
+	if !underSystemd {
+		if exe, err := os.Executable(); err == nil {
+			c := exec.Command(exe, "serve")
+			c.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
+			_ = c.Start()
+		}
+	}
+	os.Exit(0)
 }
 
 // ---- misc helpers ----

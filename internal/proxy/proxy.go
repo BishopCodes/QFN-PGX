@@ -160,7 +160,7 @@ func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ID:        p.Registry.NextID(),
 		Endpoint:  endpointOf(r.URL.Path),
 		Model:     reqMeta.Model,
-		Client:    clientIP(r),
+		Client:    callerLabel(r),
 		StartedAt: time.Now(),
 		Phase:     "prefill",
 		Stream:    reqMeta.Stream || strings.Contains(resp.Header.Get("Content-Type"), "text/event-stream"),
@@ -494,4 +494,13 @@ func writeJSONError(w http.ResponseWriter, status int, typ, msg string) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"error": map[string]string{"type": typ, "message": msg},
 	})
+}
+
+// callerLabel attributes a request: the console's named-key label wins (set by
+// auth middleware, caller-sent copies stripped there), else remote addr.
+func callerLabel(r *http.Request) string {
+	if c := r.Header.Get("X-Qfn-Client"); c != "" {
+		return c
+	}
+	return clientIP(r)
 }

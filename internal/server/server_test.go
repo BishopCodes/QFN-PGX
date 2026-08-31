@@ -79,6 +79,7 @@ func newTestServer(t *testing.T, preflightErr error) (*httptest.Server, *auth.St
 		Manager:   mgr,
 		Registry:  reg,
 		Proxy:     proxy.New(reg),
+		NoLogPump: true, // the background pump would race docker-call assertions
 		Profiles:  func() []string { return []string{"daily"} },
 		Resolve: func(string) (config.Engine, string, error) {
 			return cfg.Engine, "enginekey", nil

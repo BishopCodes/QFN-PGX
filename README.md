@@ -30,13 +30,21 @@ layers vs. published nvfp4). `qfn up` refuses to launch when the pool can't
 hold the model (the GB10 memory trap, guarded), and profiles layer over
 `config.toml` like git branches: `qfn up long-ctx`.
 
-**Web console (`:8799`)** — model status with one-click start/restart/stop
-(the same preflight-guarded launch path the CLI uses; boot phase + log tail
-stream live), a backpressure banner wired to the signals that actually predict
-vLLM trouble (swap %, PSI mem/io, KV pressure), per-core CPU, the container's
-true pool charge via its cgroup, NVMe read rate (that's PLE streaming), and a
-requests feed: phase (prefilling/decoding), tokens, tokens/s, TTFT — every
-live request, SSE-abort detection included.
+**Web console (`:8799`)** — Tailwind-styled, push-only (one SSE multiplexer;
+zero polling), with vendored TanStack Charts for the perf graph. Engine panel
+shows live boot progress (phase · percent · ETA, parsed from the log stream);
+one server-side `docker logs -f` pump fans out to every tab with a bounded
+replay, so reconnects neither re-flood the screen nor hammer docker — the log
+pane pauses following when you scroll up instead of yanking. Requests render
+as a real table with click-in per-request timing; every bar carries its
+used-of-total numbers; a `?` on every panel explains what it means (and the
+`? help` button gives the full tour). **Playground**: chat the model while
+flipping temperature / top_p / max-tokens / thinking live, with presets and
+per-run ttft+tok/s stats — the config-testing loop without leaving the
+browser. **Restart console** button: the web process exits and systemd
+relaunches it, so `sudo make install` + one click = upgraded console, engine
+untouched. CLI twins: `qfn serve stop|restart|status` (systemd-aware,
+pidfile fallback).
 
 **The front door** — `/v1/*` on 8799 is the only way in (engine lockdown:
 loopback docker bind + a generated API key only `qfn` holds). Two dialects
@@ -49,7 +57,9 @@ SSE keepalives at event boundaries — no more proxy timeouts mid-decode —
 records usage per request, and cancels upstream GPU work the moment your
 client hangs up. `qfn chat` goes through it too, so the dashboard sees REPL
 traffic. Machine auth for agents: `qfn lockdown front-key` →
-`Authorization: Bearer …`. `serve.sampling_defaults = true` fills omitted
+`Authorization: Bearer …` — or mint individually revocable, request-attributed
+ones with `qfn keys add <name>` (opencode, external harnesses, scripts;
+`qfn keys list|rm` for the rest of the lifecycle). `serve.sampling_defaults = true` fills omitted
 sampling params from the checkpoint's `generation_config.json` (client-set
 values are never overridden). Named per-client API keys are schema-ready
 (`serve.api_keys`) for when multi-tenant matters.
@@ -113,11 +123,17 @@ loopback under lockdown; `/v1/*` on the console is the only way in.
 make build     # host binary → ./bin/qfn
 make install   # …and put it on PATH (sudo needed for /usr/local/bin; or PREFIX=~/.local/bin)
 make arm64     # CGO_ENABLED=0 static aarch64 — this is what runs on the Spark
+make webcss    # rebuild web/style.css from web/src/input.css (dev-only, Tailwind standalone CLI)
 make test      # go test ./...
 make deploy SPARK=bishop@10.0.1.42   # scp + swap the binary
 ```
 
 On the Spark itself, a plain flow is: `git clone … && cd QFN-PGX && make build && sudo make install`
+
+Unattended first-run (Ansible, CI, muscle-memory): `echo 'pw' | qfn init
+--defaults --password-stdin`, then tune with `qfn config set`. The vendored
+chart bundle regenerates via the `chartjs` recipe comment in the Makefile
+(npm on the dev box; output committed so the Spark needs no toolchain).
 — `make build` alone only leaves the binary at `./bin/qfn` (that tripped the first `command not found`).
 
 Upstream sync: `engine/` files stay byte-verbatim (re-sync recipe in
