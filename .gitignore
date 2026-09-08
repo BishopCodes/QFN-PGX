@@ -1,4 +1,7 @@
 /bin/
 /dist/
+/build
+/.plan-scratch
 *.log
 .DS_Store
+__pycache__/
