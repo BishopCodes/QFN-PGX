@@ -62,6 +62,27 @@ func TestSaveLoadRoundTrip(t *testing.T) {
 	}
 }
 
+// The tpurtell-harvest knobs must survive FromEngine→Save→Load→Apply.
+func TestNewKnobsRoundTrip(t *testing.T) {
+	useTempDir(t)
+	e := config.Defaults().Engine
+	e.ReadAhead = 2048
+	e.HostEmbed = true
+	e.MTPAdaptive = "3:1-4,1:5-16"
+	if err := Save(FromEngine("spark", "", e)); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load("spark")
+	if err != nil {
+		t.Fatal(err)
+	}
+	base := config.Defaults().Engine
+	got.Apply(&base)
+	if base.ReadAhead != 2048 || !base.HostEmbed || base.MTPAdaptive != "3:1-4,1:5-16" {
+		t.Fatalf("knob round-trip lost: %+v", base)
+	}
+}
+
 func TestListAndDelete(t *testing.T) {
 	useTempDir(t)
 	e := config.Defaults().Engine

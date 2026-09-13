@@ -43,6 +43,8 @@ func TestDockerArgsMirrorsServeSh(t *testing.T) {
 		"-p 127.0.0.1:18300:8000", // loopback bind = the QFN-PGX delta
 		"-v /hf:/hf -e HF_HOME=/hf -e HF_HUB_OFFLINE=1",
 		"-e VLLM_PLE_MMAP=1 -e VLLM_PLE_MMAP_WORKERS=32 -e VLLM_PLE_MMAP_PREWARM=0",
+		"-e VLLM_PLE_MMAP_READAHEAD=0", // readahead off until benched (tpurtell default: 2048)
+		"-e QWEN38_HOST_EMBEDDINGS=0",  // host token tables off by default
 		"-e VLLM_QSA_EXACT_TOPK=1",
 		"-e VLLM_USE_FLASHINFER_SAMPLER=1 -e VLLM_ALLOW_LONG_MAX_MODEL_LEN=0",
 	} {
@@ -206,6 +208,39 @@ func TestStatusLocator(t *testing.T) {
 	st := pl.Status(config.Defaults().Engine)
 	if !st.RepoExists || st.Snapshot != "rev1" || !st.HybridPrepared {
 		t.Fatalf("%+v", st)
+	}
+}
+
+func TestDockerArgsTPurtellKnobs(t *testing.T) {
+	e := config.Defaults().Engine
+	e.ReadAhead = 2048
+	e.HostEmbed = true
+	args := defaultArgs(t, e, LaunchOpts{EngineAPIKey: "k", HFCacheHost: "/hf"})
+	joined := strings.Join(args, " ")
+	if !strings.Contains(joined, "-e VLLM_PLE_MMAP_READAHEAD=2048") {
+		t.Error("readahead env missing")
+	}
+	if !strings.Contains(joined, "-e QWEN38_HOST_EMBEDDINGS=1") {
+		t.Error("host embeddings env missing")
+	}
+}
+
+func TestDockerArgsAdaptiveMTP(t *testing.T) {
+	e := config.Defaults().Engine
+	e.MTPAdaptive = "3:1-4,1:5-16"
+	args := defaultArgs(t, e, LaunchOpts{EngineAPIKey: "k", HFCacheHost: "/hf"})
+	joined := strings.Join(args, " ")
+	want := `--speculative-config {"method":"mtp","num_speculative_tokens":2,"num_speculative_tokens_per_batch_size":[[1,4,3],[5,16,1]]}`
+	if !strings.Contains(joined, want) {
+		t.Errorf("adaptive speculative config missing\nwant: %s\ngot:  %s", want, joined)
+	}
+	// With YaRN both the draft max_model_len and the ranges must appear.
+	e.Yarn = true
+	e.Ctx = 500000
+	args = defaultArgs(t, e, LaunchOpts{EngineAPIKey: "k", HFCacheHost: "/hf"})
+	joined = strings.Join(args, " ")
+	if !strings.Contains(joined, `"num_speculative_tokens":2,"max_model_len":500000,"num_speculative_tokens_per_batch_size":[[1,4,3],[5,16,1]]`) {
+		t.Error("adaptive+YaRN spec wrong: " + joined)
 	}
 }
 

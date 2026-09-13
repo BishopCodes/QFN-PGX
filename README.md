@@ -79,11 +79,50 @@ from host `/proc` because NVML on GB10 is decorative; `nvidia-smi` is used
 only for util/power/clocks/temp.
 
 **Ops** — `qfn doctor` preflights docker/runtime/checkpoint/disk/memory
-pressure; `qfn bench` is the upstream smoke battery (cold-prefill tok/s,
+pressure (plus an upstream-base tag watch: pinned digest vs. the live
+`qwen38-flash-next` tag); `qfn doctor --vision-matrix` qualifies image input
+with the 1/4/16-image probe battery and files a timestamped receipt under the
+state dir; `qfn bench` is the upstream smoke battery (cold-prefill tok/s,
 prefix-cache HIT, byte-exact determinism at T=0, decode tok/s incl. TTFT,
 optional needle) with JSON output and a drift history; `qfn stats -w` gives
 the same numbers headless; `qfn service` owns its systemd units (inventory
 tracked, `uninstall --list` before anything is removed).
+
+## Checkpoints
+
+| snapshot | size | notes |
+|---|---|---|
+| `RadixArk/Qwen3.8-Flash-Next-NVFP4` (default) | ~122 GiB | the port this lane was tuned against; per-layer expert shards + `model-plefp8-*`; **no `processor_config.json`** (vision probes may need it copied in) |
+| `nvidia/Qwen3.8-Flash-Next-NVFP4` | ~129 GiB | NVIDIA's official release: MSE-calibrated scales, FP8 PLE table and FP8-block MTP experts in one `model-fp8-mtp-ple` shard; ships `processor_config.json` |
+
+Both load unmodified on this engine image: the Dockerfile ports upstream's
+mixed-ModelOpt fixes (#55513 + the FP8-PLE half of #54882) locally, and the
+PLE mmap lane resolves shard files by tensor name through the safetensors
+index, so either layout gathers from NVMe identically. Switch via profile:
+
+```toml
+# ~/.config/qfn/profiles/nvidia.toml  →  qfn up nvidia
+description = "official NVIDIA NVFP4 release (MSE-calibrated; FP8 MTP experts + FP8 PLE)"
+model = "nvidia/Qwen3.8-Flash-Next-NVFP4"
+```
+
+Disk guard and `qfn pull`'s free-space hint are model-aware (138 GiB vs 130).
+
+## Tuning knobs (off by default — each is a `qfn bench` A/B away from your default)
+
+- `engine.ple_readahead = 2048` — posix_fadvise hints for the PLE rows a step
+  will touch, ahead of the gather. Pure I/O, numerically inert; +8–11 % C1
+  decode in the upstream Spark lane (tpurtell's PR #54129 port).
+- `engine.host_embeddings = true` — the two 1.184 GiB token-embedding tables
+  (target + MTP draft) move to pinned host RAM, back to the KV pool. Off
+  until this lane's bench agrees with upstream's numbers.
+- `engine.mtp_adaptive = "3:1-4,1:5-16"` — batch-shaped draft lengths (draft
+  3 while ≤4 sequences, 1 up to 16): keeps MTP's win at batch 1 without the
+  large-batch regression. Needs `engine.mtp > 0`.
+- `engine.kv_dtype = "fp8"` — ~2× KV pool via the B12x sparse-GQA kernels;
+  requires `qfn build --b12x` (build-gated: the bridge replaces the QSA
+  attention call), and **bench quality first** — no full-model BF16-vs-FP8 KV
+  quality control exists yet.
 
 ## Layout
 
@@ -136,9 +175,12 @@ chart bundle regenerates via the `chartjs` recipe comment in the Makefile
 (npm on the dev box; output committed so the Spark needs no toolchain).
 — `make build` alone only leaves the binary at `./bin/qfn` (that tripped the first `command not found`).
 
-Upstream sync: `engine/` files stay byte-verbatim (re-sync recipe in
-`engine/ATTRIBUTION.md`); every deliberate launch deviation (loopback bind,
-`--api-key`, no cgroup memory cap) lives in Go, covered by argv golden tests.
+Upstream sync: the vendored upstream files in `engine/src`/`tools` stay
+verbatim (re-sync recipe in `engine/ATTRIBUTION.md` — mind the NOTE: our
+Dockerfile sections 7–9 need re-applying after a sync); every deliberate
+launch deviation (loopback bind, `--api-key`, no cgroup memory cap) lives in
+Go, covered by argv golden tests.
 
-Apache-2.0 parts in `engine/` belong to their authors (vLLM image, fp8 tool by
-@Saren-Arterius); everything else is MIT.
+Apache-2.0 parts in `engine/` belong to their authors (vLLM image and fp8
+tool by @Saren-Arterius; the NVIDIA-checkpoint/host-embedding/QSA-FP8 ports
+by @tpurtell); everything else is MIT.

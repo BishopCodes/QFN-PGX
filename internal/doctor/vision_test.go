@@ -20,8 +20,12 @@ func TestVisionCheckClassification(t *testing.T) {
 		{"flag missing", VisionDeps{SnapshotHasVision: true, Args: []string{"--max-model-len", "262144"}}, "bad", "without"},
 		{"limit zero", VisionDeps{SnapshotHasVision: true, Args: []string{"--limit-mm-per-prompt", `{"image": 0}`},
 			Post: fakePost(400, `At most 0 image(s) as input`, nil)}, "bad", "flag"},
-		{"build predates mm", VisionDeps{SnapshotHasVision: true, Args: []string{"--limit-mm-per-prompt", `{"image": 4}`},
-			Post: fakePost(400, `ValueError: model does not support modality 'image'`, nil)}, "bad", "predates"},
+		{"modality refused → snapshot mm files", VisionDeps{SnapshotHasVision: true, Args: []string{"--limit-mm-per-prompt", `{"image": 4}`},
+			Post: fakePost(400, `ValueError: model does not support modality 'image'`, nil)}, "bad", "processor_config.json"},
+		{"matrix all pass", VisionDeps{SnapshotHasVision: true, Args: []string{"--limit-mm-per-prompt", `{"image": 16}`},
+			Images: []int{1, 4, 16}, Post: fakePost(200, `{"choices":[{}]}`, nil)}, "ok", "probes"},
+		{"matrix fails at 16", VisionDeps{SnapshotHasVision: true, Args: []string{"--limit-mm-per-prompt", `{"image": 16}`},
+			Images: []int{1, 4, 16}, Post: fakePostSeq([]int{200, 200, 400}, `this model does not support that input`, nil)}, "bad", "16-image"},
 		{"other error", VisionDeps{SnapshotHasVision: true, Args: []string{"--limit-mm-per-prompt", "x"},
 			Post: fakePost(500, `internal blast`, nil)}, "warn", "500"},
 		{"conn refused", VisionDeps{SnapshotHasVision: true, Args: []string{"--limit-mm-per-prompt", "x"},
@@ -48,4 +52,17 @@ func TestVisionCheckClassification(t *testing.T) {
 
 func fakePost(code int, body string, err error) func(context.Context, string, string, []byte) (int, string, error) {
 	return func(context.Context, string, string, []byte) (int, string, error) { return code, body, err }
+}
+
+// fakePostSeq returns per-call codes (last code repeats) — matrix probes.
+func fakePostSeq(codes []int, body string, err error) func(context.Context, string, string, []byte) (int, string, error) {
+	i := 0
+	return func(context.Context, string, string, []byte) (int, string, error) {
+		c := codes[len(codes)-1]
+		if i < len(codes) {
+			c = codes[i]
+		}
+		i++
+		return c, body, err
+	}
 }

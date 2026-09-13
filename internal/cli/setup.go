@@ -409,10 +409,20 @@ func configGetPath(cfg config.Config, path string) (string, error) {
 		return fmt.Sprint(e.Yarn), nil
 	case "engine.mtp":
 		return fmt.Sprint(e.MTP), nil
+	case "engine.mtp_adaptive":
+		return e.MTPAdaptive, nil
 	case "engine.seqs":
 		return fmt.Sprint(e.Seqs), nil
 	case "engine.gpu_mem":
 		return fmt.Sprint(e.GpuMem), nil
+	case "engine.kv_dtype":
+		return e.KVDtype, nil
+	case "engine.workers":
+		return fmt.Sprint(e.Workers), nil
+	case "engine.ple_readahead":
+		return fmt.Sprint(e.ReadAhead), nil
+	case "engine.host_embeddings":
+		return fmt.Sprint(e.HostEmbed), nil
 	case "engine.prewarm":
 		return fmt.Sprint(e.Prewarm), nil
 	case "engine.prefix_cache":
@@ -465,10 +475,20 @@ func configSetPath(cfg *config.Config, path, val string) error {
 		return pb(&e.Yarn)
 	case "engine.mtp":
 		return pi(&e.MTP)
+	case "engine.mtp_adaptive":
+		e.MTPAdaptive = val
 	case "engine.seqs":
 		return pi(&e.Seqs)
 	case "engine.gpu_mem":
 		return pf(&e.GpuMem)
+	case "engine.kv_dtype":
+		e.KVDtype = val
+	case "engine.workers":
+		return pi(&e.Workers)
+	case "engine.ple_readahead":
+		return pi(&e.ReadAhead)
+	case "engine.host_embeddings":
+		return pb(&e.HostEmbed)
 	case "engine.prewarm":
 		return pb(&e.Prewarm)
 	case "engine.prefix_cache":

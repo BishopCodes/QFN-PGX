@@ -10,16 +10,24 @@
 #   4. Prefix-caching block_size fix                   (always on; needed for --enable-prefix-caching)
 #   5. Exact, deterministic QSA top-k                  (VLLM_QSA_EXACT_TOPK=1)
 #   6. NVFP4 experts + fp8 side-layers "hybrid" mode   (VLLM_FP8_HYBRID=1)
+#   7. NVIDIA official ckpt: FP8-block MTP + FP8 PLE   (always on; inert on RadixArk)
+#   8. Token embeddings pinned in host RAM             (QWEN38_HOST_EMBEDDINGS=1)
+#   9. QSA FP8 KV cache via B12x kernels               (build-time: --build-arg B12X_COMMIT)
 #
 #   docker build -t qwen38-flash-dgx .
+#   docker build -t qwen38-flash-dgx --build-arg B12X_COMMIT=c76a40ee684cb3ef7d2c223d56a9b9cff25a3a1e .   # = `qfn build --b12x`
 #
 # The base image is multi-arch (arm64 for the Spark's Grace CPU). Pinned by digest
 # for reproducibility; bump the tag below if the upstream recipe moves.
 FROM vllm/vllm-openai:qwen38-flash-next@sha256:fc120ece0a388cc0aa1caad4a9f1cd92113484ab7ec2fd0efadd62585be05bf8
-# NOTE: as of 2026-08-31 this tag's digest IS the newest available. vLLM
-# merged Qwen3.8-Flash-Next multimodal support into main the same day
-# (#53896); this image predates that merge, so image INPUT rides the sglang
-# path until the tag is rebuilt. `qfn doctor` classifies which case applies.
+# NOTE (2026-09-08, replaces the 08-31 note): the "build predates mm wiring" theory
+# is contradicted by receipts — independent recipes on THIS EXACT base digest serve
+# image input on SM120 and SM121 (1/4/16-image probes, github.com/tpurtell/
+# sm12x-exl3-qwen3.8-flash-next; tag fc120ece confirmed unchanged 2026-09-07).
+# #53896 (merged 08-31) evidently carried the mm wiring this image was built from
+# the release/qwen38next branch already. Verify locally: `qfn doctor --vision-matrix`.
+# If a probe ever fails on "not supported", suspect the SNAPSHOT's mm files
+# (processor_config.json is missing from the RadixArk port) before the engine build.
 
 # Package layout inside the official image (vLLM 0.1.dev20073, torch 2.13 cu130,
 # numpy 2.2.6 — the patch needs numpy, already present).
@@ -86,3 +94,50 @@ RUN cp ${MO} ${MO}.orig \
  && sed -i 's/^from \. import model$/from . import model\nfrom vllm_fp8_hybrid_modelopt import excluded_quant_config as _fp8_hybrid_excluded/' ${QSA} \
  && grep -q "_fp8_hybrid_excluded(quant_config)" ${QSA} && grep -q "^from vllm_fp8_hybrid_modelopt import" ${QSA} \
  && python3 -c "import ast; ast.parse(open('${QSA}').read()); print('qsa.py hooked OK')"
+
+# --- 7. NVIDIA official NVFP4 checkpoint loading (always on; inert on RadixArk) ----
+# nvidia/Qwen3.8-Flash-Next-NVFP4 packs MTP routed experts as 128x128 block FP8
+# ("FP8_PB_WO") and the PLE table as global-scale FP8 under a MIXED_PRECISION
+# ModelOpt config. The stock loader mis-routes both on this base — upstream fixed
+# them in PR #55513 (still open) and #54882/d4d703c (not in this image). These two
+# assert-anchored ports close the gap locally. Inert for the RadixArk checkpoint:
+# its plain ModelOpt config never enters the mixed-precision branches.
+# Vendored from github.com/tpurtell/sm12x-exl3-qwen3.8-flash-next (Apache-2.0);
+# see engine/ATTRIBUTION.md.
+COPY src/port-nvidia-mtp-fp8.py /tmp/port-nvidia-mtp-fp8.py
+COPY src/port-nvidia-ple-fp8.py /tmp/port-nvidia-ple-fp8.py
+RUN python3 /tmp/port-nvidia-mtp-fp8.py ${SP}/vllm \
+ && python3 /tmp/port-nvidia-ple-fp8.py ${SP}/vllm \
+ && python3 -c "import ast; ast.parse(open('${PLE}').read()); print('ple_layer.py nvidia-ple port OK')"
+
+# --- 8. Token embeddings pinned in host RAM (QWEN38_HOST_EMBEDDINGS=1) -------------
+# Moves the 1.184 GiB (248320x2560 bf16) token embedding table — target *and* MTP
+# draft — out of the GPU slice into pinned host RAM, rows gathered per step over
+# PCIe (~1.2 GiB x2 back to the pool for KV). Off by default (ENV below); qfn sets
+# the env per engine.host_embeddings. Vendored from the tpurtell recipe (Apache-2.0).
+COPY src/qwen_host_embedding.py ${SP}/vllm/model_executor/layers/qwen_host_embedding.py
+COPY src/port-host-embedding.py /tmp/port-host-embedding.py
+RUN python3 /tmp/port-host-embedding.py ${SP}/vllm \
+ && python3 -c "import ast; ast.parse(open('${SP}/vllm/model_executor/layers/vocab_parallel_embedding.py').read()); print('vocab_parallel_embedding.py hooked OK')"
+ENV QWEN38_HOST_EMBEDDINGS=0
+
+# --- 9. QSA FP8 KV cache via B12x sparse-GQA kernels (build-time opt-in) ------------
+# engine.kv_dtype="fp8" (~2x KV memory) is refused by the stock QSA layers ("requires
+# a BF16 main KV cache"). The B12x sparse-GQA kernel (sparkinfer-glmrt, CUTE-DSL,
+# sm_121a) reads FP8 KV pages directly; the bridge routes QSA attention to it.
+# This changes the QSA attention path for BF16 too, so it is BUILD-gated: the default
+# image (B12X_COMMIT empty) is untouched. `qfn build --b12x` = --build-arg
+# B12X_COMMIT=c76a40ee684cb3ef7d2c223d56a9b9cff25a3a1e; then run with kv_dtype="fp8"
+# only after `qfn bench` clears quality (the upstream recipe ships FP8 KV but ran no
+# BF16-vs-FP8 KV full-model quality control).
+ARG B12X_COMMIT=
+ENV CUTE_DSL_ARCH=sm_121a
+COPY src/b12x_qsa_attention.py ${SP}/vllm/models/qwen3_8_flash_next/nvidia/b12x_qsa_attention.py
+COPY src/port-qsa-fp8.py /tmp/port-qsa-fp8.py
+RUN set -e; \
+    if [ -n "${B12X_COMMIT}" ]; then \
+      python3 -c "import os, tarfile, urllib.request; from pathlib import Path; c=os.environ['B12X_COMMIT']; urllib.request.urlretrieve('https://github.com/tpurtell/sparkinfer-glmrt/archive/'+c+'.tar.gz', '/tmp/b12x.tar.gz'); a=tarfile.open('/tmp/b12x.tar.gz'); a.extractall('/opt', filter='data'); a.close(); Path('/opt/sparkinfer-glmrt-'+c).rename('/opt/b12x'); Path('/tmp/b12x.tar.gz').unlink()" \
+   && python3 -m pip install --no-deps -e /opt/b12x \
+   && python3 -c 'import b12x; print("b12x installed")' \
+   && python3 /tmp/port-qsa-fp8.py ${SP}/vllm; \
+    else rm -f ${SP}/vllm/models/qwen3_8_flash_next/nvidia/b12x_qsa_attention.py; echo "B12x build skipped (default image unchanged; kv_dtype=fp8 needs --build-arg B12X_COMMIT)"; fi

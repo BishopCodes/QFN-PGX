@@ -35,11 +35,14 @@ type Engine struct {
 	Ctx          int     `toml:"ctx"`               // CTX
 	Yarn         bool    `toml:"yarn"`              // YARN
 	MTP          int     `toml:"mtp"`               // MTP (speculative tokens; 0 = off)
+	MTPAdaptive  string  `toml:"mtp_adaptive"`      // batch-shaped draft lengths, "3:1-4,1:5-16" ("" = fixed MTP)
 	Seqs         int     `toml:"seqs"`              // SEQS
 	GpuMem       float64 `toml:"gpu_mem"`           // GPU_MEM (hard cap 0.875)
 	KVDtype      string  `toml:"kv_dtype"`          // KV_DTYPE
 	Prewarm      bool    `toml:"prewarm"`           // PREWARM
 	Workers      int     `toml:"workers"`           // WORKERS (mmap gather threads)
+	ReadAhead    int     `toml:"ple_readahead"`     // PLE_MMAP_READAHEAD (0 = off; 2048 = Spark-tuned)
+	HostEmbed    bool    `toml:"host_embeddings"`   // QWEN38_HOST_EMBEDDINGS (token tables in pinned host RAM)
 	CPUSet       string  `toml:"cpuset"`            // CPUSET ("" = unpinned)
 	Extra        string  `toml:"extra"`             // EXTRA (verbatim extra vllm flags)
 	Port         int     `toml:"port"`              // host port published for the API
@@ -99,11 +102,14 @@ func Defaults() Config {
 			Ctx:          262144,
 			Yarn:         false,
 			MTP:          2,
+			MTPAdaptive:  "",
 			Seqs:         8,
 			GpuMem:       0.85,
 			KVDtype:      "auto",
 			Prewarm:      false,
 			Workers:      32,
+			ReadAhead:    0,
+			HostEmbed:    false,
 			CPUSet:       "",
 			Extra:        "",
 			Port:         18300,

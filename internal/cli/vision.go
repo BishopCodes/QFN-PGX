@@ -8,12 +8,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/BishopCodes/qfn-pgx/internal/config"
 	"github.com/BishopCodes/qfn-pgx/internal/doctor"
 )
 
-func (a *App) visionCheck(ctx context.Context) *doctor.Check {
+func (a *App) visionCheck(ctx context.Context, images []int) *doctor.Check {
 	hasVision := false
 	if snapIn, _, err := a.Locator().SnapshotInContainer(a.Cfg.Engine); err == nil {
 		host := filepath.Join(config.ExpandHome(a.Cfg.Paths.HFCache), strings.TrimPrefix(snapIn, "/hf"))
@@ -30,6 +31,7 @@ func (a *App) visionCheck(ctx context.Context) *doctor.Check {
 		Model:             a.Cfg.Engine.Model,
 		Args:              containerArgs(ctx, a),
 		SnapshotHasVision: hasVision,
+		Images:            images,
 		Post:              doctor.HTTPPost,
 	})
 	return &ch
@@ -50,4 +52,27 @@ func containerArgs(ctx context.Context, a *App) []string {
 		}
 	}
 	return all
+}
+
+// writeVisionReceipt persists a doctor vision-matrix run under
+// <state_dir>/vision-receipts/ — the artifact a matrix run exists to produce.
+func writeVisionReceipt(a *App, ch doctor.Check, images []int) {
+	dir := filepath.Join(config.ExpandHome(a.Cfg.Paths.StateDir), "vision-receipts")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		warnf("vision receipt not saved: %v", err)
+		return
+	}
+	rec := struct {
+		Time   string       `json:"time"`
+		Model  string       `json:"model"`
+		Images []int        `json:"images_probed"`
+		Check  doctor.Check `json:"check"`
+	}{time.Now().UTC().Format(time.RFC3339), a.Cfg.Engine.Model, images, ch}
+	b, _ := json.MarshalIndent(rec, "", "  ")
+	p := filepath.Join(dir, "vision-"+time.Now().UTC().Format("20060102T150405Z")+".json")
+	if err := os.WriteFile(p, b, 0o644); err != nil {
+		warnf("vision receipt not saved: %v", err)
+		return
+	}
+	dimf("vision receipt: %s", p)
 }

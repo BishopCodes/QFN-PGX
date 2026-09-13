@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -76,6 +77,7 @@ func Run(ctx context.Context, d Deps, quick bool) []Check {
 				add(Check{ID: "engine.base_digest", Status: "ok", Msg: "pinned base digest present: " + engineassets.Digest()})
 			}
 		}
+		add(baseTagCheck(ctx, d))
 	}
 
 	// snapshot & hybrid
@@ -99,12 +101,17 @@ func Run(ctx context.Context, d Deps, quick bool) []Check {
 		}
 	}
 
-	// disk free under the HF cache (upstream: ~130 GB nvfp4, +13 GB hybrid)
+	// disk free under the HF cache (upstream: ~130 GB nvfp4, +13 GB hybrid;
+	// the nvidia/ official snapshot adds ~8 GB: one MTP+PLE shard file and
+	// slightly wider BF16 side layers)
 	if free, ok := statFreeKB(config.ExpandHome(cfg.Paths.HFCache)); ok {
 		gib := free / 1048576
 		need := uint64(130)
+		if strings.HasPrefix(cfg.Engine.Model, "nvidia/") {
+			need = 138
+		}
 		if cfg.Engine.Mode == "hybrid" {
-			need = 143
+			need += 13
 		}
 		if gib >= need {
 			add(Check{ID: "disk", Status: "ok", Msg: fmt.Sprintf("%d GiB free under %s", gib, cfg.Paths.HFCache)})
@@ -170,6 +177,34 @@ func sortChecks(out []Check) {
 	sort.SliceStable(out, func(i, j int) bool {
 		return order[out[i].Status] < order[out[j].Status]
 	})
+}
+
+// baseTagCheck resolves the upstream qwen38-flash-next tag (network, via the
+// docker CLI — no daemon auth needed for public images) and compares against
+// the pinned digest. The tag sitting on fc120ece since 2026-08-26 is expected;
+// a moved tag is a qfn build signal (newer builds may carry mm/MTP fixes).
+func baseTagCheck(ctx context.Context, d Deps) Check {
+	base := engineassets.BaseImageRef()
+	if base == "" {
+		return Check{ID: "engine.base_tag", Status: "ok", Msg: "no pinned base reference to resolve (test build)"}
+	}
+	ref := base
+	if i := strings.IndexByte(ref, '@'); i >= 0 {
+		ref = ref[:i]
+	}
+	out, err := d.Docker.Run(ctx, "buildx", "imagetools", "inspect", ref)
+	if err != nil {
+		return Check{ID: "engine.base_tag", Status: "warn", Msg: "upstream tag not resolvable: " + errOr(err, out)}
+	}
+	m := regexp.MustCompile(`(?m)^Digest:\s*(sha256:[0-9a-f]{64})`).FindStringSubmatch(out)
+	want := engineassets.Digest()
+	if m == nil {
+		return Check{ID: "engine.base_tag", Status: "warn", Msg: "could not parse a digest from imagetools output"}
+	}
+	if m[1] == want {
+		return Check{ID: "engine.base_tag", Status: "ok", Msg: "upstream tag still at the pinned digest"}
+	}
+	return Check{ID: "engine.base_tag", Status: "warn", Msg: "upstream tag MOVED: " + shorten(m[1]), Hint: "run `qfn build` — the rebuilt base may carry mm/MTP fixes; pinned digest stays until you rebuild"}
 }
 
 // Preflight is the launch gate used by `qfn up` and POST /api/engine/up.

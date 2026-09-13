@@ -76,6 +76,8 @@ func DockerArgs(e config.Engine, loc SnapshotLocator, o LaunchOpts) ([]string, e
 		"-e", "VLLM_PLE_MMAP=1",
 		"-e", "VLLM_PLE_MMAP_WORKERS="+strconv.Itoa(e.Workers),
 		"-e", "VLLM_PLE_MMAP_PREWARM="+b01(e.Prewarm),
+		"-e", "VLLM_PLE_MMAP_READAHEAD="+strconv.Itoa(max(e.ReadAhead, 0)),
+		"-e", "QWEN38_HOST_EMBEDDINGS="+b01(e.HostEmbed),
 		"-e", "VLLM_QSA_EXACT_TOPK="+b01(e.ExactTopK),
 		"-e", "VLLM_USE_FLASHINFER_SAMPLER=1",
 		"-e", "VLLM_ALLOW_LONG_MAX_MODEL_LEN="+allowLong,
@@ -112,14 +114,19 @@ func DockerArgs(e config.Engine, loc SnapshotLocator, o LaunchOpts) ([]string, e
 		"--enable-auto-tool-choice", "--tool-call-parser", "qwen3_coder", "--reasoning-parser", "qwen3",
 	)
 	if e.MTP > 0 {
-		spec := fmt.Sprintf(`{"method":"mtp","num_speculative_tokens":%d}`, e.MTP)
+		fields := []string{`"method":"mtp"`, fmt.Sprintf(`"num_speculative_tokens":%d`, e.MTP)}
 		if e.Yarn {
 			// serve.sh: dict hf_overrides do not propagate to the draft model;
 			// forcing the draft's max_model_len through the spec config fixes
 			// the YaRN+MTP abort.
-			spec = fmt.Sprintf(`{"method":"mtp","num_speculative_tokens":%d,"max_model_len":%d}`, e.MTP, e.Ctx)
+			fields = append(fields, fmt.Sprintf(`"max_model_len":%d`, e.Ctx))
 		}
-		args = append(args, "--speculative-config", spec)
+		if e.MTPAdaptive != "" {
+			if ranges, ok := adaptiveRanges(e.MTPAdaptive); ok {
+				fields = append(fields, `"num_speculative_tokens_per_batch_size":`+ranges)
+			}
+		}
+		args = append(args, "--speculative-config", "{"+strings.Join(fields, ",")+"}")
 	}
 	if e.Lockdown {
 		args = append(args, "--api-key", o.EngineAPIKey)
@@ -132,4 +139,28 @@ func b01(b bool) string {
 		return "1"
 	}
 	return "0"
+}
+
+// adaptiveRanges renders "3:1-4,1:5-16" as vLLM's
+// num_speculative_tokens_per_batch_size JSON, [[1,4,3],[5,16,1]]. config.Validate
+// enforces the grammar; ok=false is the defensive belt, not the branch.
+func adaptiveRanges(s string) (string, bool) {
+	var parts []string
+	for _, p := range strings.Split(s, ",") {
+		tok, rng, ok := strings.Cut(strings.TrimSpace(p), ":")
+		if !ok {
+			return "", false
+		}
+		lo, hi, ok := strings.Cut(strings.TrimSpace(rng), "-")
+		if !ok {
+			return "", false
+		}
+		l, err1 := strconv.Atoi(strings.TrimSpace(lo))
+		h, err2 := strconv.Atoi(strings.TrimSpace(hi))
+		if err1 != nil || err2 != nil {
+			return "", false
+		}
+		parts = append(parts, fmt.Sprintf("[%d,%d,%s]", l, h, strings.TrimSpace(tok)))
+	}
+	return "[" + strings.Join(parts, ",") + "]", len(parts) > 0
 }

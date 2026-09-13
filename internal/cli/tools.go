@@ -35,6 +35,7 @@ func addTools(root *cobra.Command, app *App) {
 		RunE: func(c *cobra.Command, _ []string) error {
 			quick, _ := c.Flags().GetBool("quick")
 			asJSON, _ := c.Flags().GetBool("json")
+			vmat, _ := c.Flags().GetBool("vision-matrix")
 			checks := doctor.Run(c.Context(), doctor.Deps{
 				Cfg:    func() config.Config { return app.Cfg },
 				Docker: app.Docker,
@@ -42,8 +43,15 @@ func addTools(root *cobra.Command, app *App) {
 			}, quick)
 			checks = append(checks, doctor.ServiceState(c.Context())...)
 			if !quick {
-				if v := app.visionCheck(c.Context()); v != nil {
+				var imgs []int
+				if vmat {
+					imgs = []int{1, 4, 16}
+				}
+				if v := app.visionCheck(c.Context(), imgs); v != nil {
 					checks = append(checks, *v)
+					if vmat {
+						writeVisionReceipt(app, *v, imgs)
+					}
 				}
 			}
 			if asJSON {
@@ -74,6 +82,7 @@ func addTools(root *cobra.Command, app *App) {
 	}
 	doc.Flags().Bool("quick", false, "skip slow probes (base-image inspect)")
 	doc.Flags().Bool("json", false, "machine-readable")
+	doc.Flags().Bool("vision-matrix", false, "probe image input at 1/4/16 images (tpurtell-style qualification battery) and save a receipt under the state dir")
 	root.AddCommand(doc)
 
 	// ---- bench ----
@@ -243,7 +252,7 @@ func addTools(root *cobra.Command, app *App) {
 	root.AddCommand(st)
 
 	// ---- build ----
-	root.AddCommand(&cobra.Command{
+	build := &cobra.Command{
 		Use:   "build", Short: "Build the engine image from the embedded (vendored) Dockerfile",
 		Args: cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
@@ -256,14 +265,20 @@ func addTools(root *cobra.Command, app *App) {
 			if err != nil {
 				return err
 			}
+			args := []string{"build", "-t", app.Cfg.Engine.Image}
+			if b12x, _ := c.Flags().GetBool("b12x"); b12x {
+				args = append(args, "--build-arg", "B12X_COMMIT="+b12xCommit)
+			}
 			fmt.Printf("  context %s\n  base %s\n", ctxDir, engineassets.BaseImageRef())
-			return streamDocker(c, "build", "-t", app.Cfg.Engine.Image, ctxDir)
+			return streamDocker(c, append(args, ctxDir)...)
 		},
-	})
+	}
+	build.Flags().Bool("b12x", false, "also install the pinned B12x kernels + QSA FP8 bridge (required for kv_dtype=\"fp8\"; changes the QSA attention path — bench before serving)")
+	root.AddCommand(build)
 
 	// ---- pull ----
 	root.AddCommand(&cobra.Command{
-		Use:   "pull", Short: "Download the checkpoint into the HF cache (resumable, ~122 GiB)",
+		Use:   "pull", Short: "Download the checkpoint into the HF cache (resumable, ~122–129 GiB)",
 		Args:  cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
 			hf := config.ExpandHome(app.Cfg.Paths.HFCache)
@@ -281,7 +296,11 @@ func addTools(root *cobra.Command, app *App) {
 			}
 			args = append(args, "-v", hf+":/hf", "--entrypoint", "bash", app.Cfg.Engine.Image,
 				"-c", fmt.Sprintf("hf download '%s' --max-workers 8", app.Cfg.Engine.Model))
-			dimf("resumable — safe to Ctrl+C and re-run; ~130 GiB free needed under %s", hf)
+			need := 130
+			if strings.HasPrefix(app.Cfg.Engine.Model, "nvidia/") {
+				need = 138
+			}
+			dimf("resumable — safe to Ctrl+C and re-run; ~%d GiB free needed under %s", need, hf)
 			return streamDocker(c, args...)
 		},
 	})
@@ -327,6 +346,10 @@ echo ">> done: $n fp8 side-layer tensors"
 		},
 	})
 }
+
+// b12xCommit pins tpurtell/sparkinfer-glmrt (B12x sparse-GQA kernels) for
+// `qfn build --b12x` — same revision the upstream Spark lane qualified.
+const b12xCommit = "c76a40ee684cb3ef7d2c223d56a9b9cff25a3a1e"
 
 // ---- helpers ----
 

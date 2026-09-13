@@ -56,3 +56,25 @@ func TestDigestAndBaseRef(t *testing.T) {
 		t.Fatal("digest not the one pinned in the Dockerfile")
 	}
 }
+
+// Every `COPY src/…`/`COPY tools/…` in the Dockerfile must resolve inside the
+// embedded FS — the build on the Spark only ever sees the extracted context.
+func TestDockerfileCopyTargetsEmbedded(t *testing.T) {
+	df, err := FS.ReadFile("Dockerfile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(df), "\n") {
+		src, ok := strings.CutPrefix(strings.TrimSpace(line), "COPY ")
+		if !ok {
+			continue
+		}
+		first := strings.Fields(src)[0]
+		if !strings.HasPrefix(first, "src/") && !strings.HasPrefix(first, "tools/") {
+			continue
+		}
+		if _, err := FS.ReadFile(first); err != nil {
+			t.Errorf("Dockerfile copies %s, which is not embedded: %v", first, err)
+		}
+	}
+}

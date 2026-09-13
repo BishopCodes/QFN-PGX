@@ -4,12 +4,17 @@
 // mode says something different — so we check all three instead of guessing:
 //  1. the snapshot's config.json declares vision_config (weights + arch)
 //  2. the running container's argv declares --limit-mm-per-prompt
-//  3. the live engine actually accepts a 1×1-PNG request
+//  3. the live engine actually accepts an N-PNG chat request (N = Images,
+//     default 1; the --vision-matrix battery is 1, 4, 16 like the tpurtell
+//     recipe's qualification)
 //
 // Upstream fact worth knowing: multimodal wiring for this architecture
-// landed in vLLM on 2026-08-31 ([Model] Support Qwen3.8-Flash-Next, #53896).
-// Engine images pinned before that boot, serve text, and hold the visual
-// weights — yet still refuse images: the model class predates the mm registry.
+// merged into vLLM main on 2026-08-31 (#53896), but receipts of independent
+// recipes on THIS pinned base digest (fc120ece) serve image input on SM120
+// and SM121 — the release/qwen38next branch that built the recipe image
+// evidently already carried the wiring. So a "not supported" answer today
+// points at the SNAPSHOT's mm files (RadixArk's port lacks
+// processor_config.json), not the engine build.
 package doctor
 
 import (
@@ -33,28 +38,34 @@ type VisionDeps struct {
 	Model             string
 	Args              []string // running container argv ("" if engine not up)
 	SnapshotHasVision bool
+	Images            []int // probe battery; nil/empty = [1]
 	Post              func(ctx context.Context, url, key string, body []byte) (int, string, error)
 }
 
-func visionBody(model string) []byte {
+func visionBody(model string, n int) []byte {
+	parts := []any{map[string]any{"type": "text", "text": "reply with the single word: ok"}}
+	for range n {
+		parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]string{
+			"url": "data:image/png;base64," + probePNGb64}})
+	}
 	b, _ := json.Marshal(map[string]any{
-		"model": model,
-		"messages": []any{map[string]any{"role": "user", "content": []any{
-			map[string]any{"type": "text", "text": "reply with the single word: ok"},
-			map[string]any{"type": "image_url", "image_url": map[string]string{
-				"url": "data:image/png;base64," + probePNGb64}},
-		}}},
+		"model":      model,
+		"messages":   []any{map[string]any{"role": "user", "content": parts}},
 		"max_tokens": 4, "stream": false,
 	})
 	return b
 }
 
-// VisionCheck runs the three-stage probe and classifies the failure mode.
+// VisionCheck runs the probe battery and classifies the first failure mode.
 func VisionCheck(ctx context.Context, d VisionDeps) Check {
 	c := Check{ID: "vision"}
+	ns := d.Images
+	if len(ns) == 0 {
+		ns = []int{1}
+	}
 	if !d.SnapshotHasVision {
 		c.Status, c.Msg = "warn", "snapshot config.json has no vision_config — image input impossible with this snapshot"
-		c.Hint = "use the full NVFP4 snapshot (RadixArk/Qwen3.8-Flash-Next-NVFP4)"
+		c.Hint = "both published NVFP4 snapshots carry the vision tower: RadixArk/Qwen3.8-Flash-Next-NVFP4 and nvidia/Qwen3.8-Flash-Next-NVFP4 — a snapshot without vision_config means the wrong repo was pulled"
 		return c
 	}
 	hasFlag := false
@@ -72,27 +83,42 @@ func VisionCheck(ctx context.Context, d VisionDeps) Check {
 		c.Hint = "the container predates the images flag — `qfn restart` (or stop + up) to relaunch with new argv"
 		return c
 	}
-	ctx, cancel := context.WithTimeout(ctx, 45*time.Second)
-	defer cancel()
-	status, body, err := d.Post(ctx, strings.TrimRight(d.Base(), "/")+"/v1/chat/completions", d.Key(), visionBody(d.Model))
-	if err != nil {
-		c.Status, c.Msg = "warn", "vision probe could not reach the engine: "+errOr(err, body)
+	for _, n := range ns {
+		pctx, cancel := context.WithTimeout(ctx, 45*time.Second)
+		status, body, err := d.Post(pctx, strings.TrimRight(d.Base(), "/")+"/v1/chat/completions", d.Key(), visionBody(d.Model, n))
+		cancel()
+		if err != nil {
+			c.Status, c.Msg = "warn", fmt.Sprintf("vision probe (%s image) could not reach the engine: %s", nLabel(n), errOr(err, body))
+			return c
+		}
+		switch {
+		case status < 400:
+			continue
+		case bodyHas(body, "at most", "not allowed"):
+			c.Status, c.Msg = "bad", fmt.Sprintf("engine rejects %s-image input: limit is below the probe count despite our flag (flag syntax silently ignored?)", nLabel(n))
+			c.Hint = "check the container start line in the engine logs"
+		case bodyHas(body, "not supported", "not a multimodal", "does not support", "no modality"):
+			c.Status, c.Msg = "bad", fmt.Sprintf("engine refuses %s-image input as a modality it does not support", nLabel(n))
+			c.Hint = "receipts show THIS pinned base serving images (tpurtell recipe, same digest, 1/4/16 probes) — so suspect the snapshot's mm files first: the RadixArk port lacks processor_config.json (copy it from nvidia/Qwen3.8-Flash-Next-NVFP4 into the snapshot dir, or serve that snapshot)"
+		default:
+			c.Status, c.Msg = "warn", fmt.Sprintf("vision probe failed (%s image, HTTP %d): %s", nLabel(n), status, firstLine(shorten(body)))
+			c.Hint = "engine's verbatim error above; run `qfn chat --image file.png \"describe\"` for a fuller probe"
+		}
 		return c
 	}
-	switch {
-	case status < 400:
+	if len(ns) > 1 {
+		c.Status, c.Msg = "ok", fmt.Sprintf("engine accepts image input (probes %v round-trip)", ns)
+	} else {
 		c.Status, c.Msg = "ok", "engine accepts image input (1×1 probe round-trip)"
-	case bodyHas(body, "at most 0", "not allowed"):
-		c.Status, c.Msg = "bad", "engine rejects images: limit is 0 despite our flag (flag syntax silently ignored?)"
-		c.Hint = "check the container start line in the engine logs"
-	case bodyHas(body, "not supported", "not a multimodal", "does not support", "no modality"):
-		c.Status, c.Msg = "bad", "engine BUILD predates multimodal support for this architecture"
-		c.Hint = "vLLM merged it into main 2026-08-31 (#53896), but the official qwen38-flash-next image tag has NOT been rebuilt since (same digest) — nothing to update to yet. Watch the tag / rebuild when it moves; sglang carries the mm path today."
-	default:
-		c.Status, c.Msg = "warn", fmt.Sprintf("vision probe failed (HTTP %d): %s", status, firstLine(shorten(body)))
-		c.Hint = "engine's verbatim error above; run `qfn chat --image file.png \"describe\"` for a fuller probe"
 	}
 	return c
+}
+
+func nLabel(n int) string {
+	if n == 1 {
+		return "1×1"
+	}
+	return fmt.Sprintf("%d", n)
 }
 
 func bodyHas(body string, subs ...string) bool {

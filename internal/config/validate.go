@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"net"
 	"regexp"
+	"strconv"
+	"strings"
 )
 
 // dockerSize matches docker's --memory shorthands like "100g" / "512m" / bytes.
@@ -20,6 +22,14 @@ func (c Config) Validate() error {
 	if c.Engine.MTP < 0 || c.Engine.MTP > 4 {
 		return fmt.Errorf("engine.mtp must be 0..4 (MTP head trained for 3 steps; 2 is this checkpoint's measured peak)")
 	}
+	if c.Engine.MTPAdaptive != "" {
+		if c.Engine.MTP <= 0 {
+			return fmt.Errorf("engine.mtp_adaptive requires engine.mtp > 0 (it only reshapes speculation per batch size)")
+		}
+		if err := validAdaptive(c.Engine.MTPAdaptive); err != nil {
+			return fmt.Errorf("engine.mtp_adaptive %q: %v (want \"N:LO-HI[,N:LO-HI…]\", e.g. \"3:1-4,1:5-16\")", c.Engine.MTPAdaptive, err)
+		}
+	}
 	if c.Engine.Seqs < 1 || c.Engine.Seqs > 64 {
 		return fmt.Errorf("engine.seqs must be 1..64")
 	}
@@ -35,10 +45,13 @@ func (c Config) Validate() error {
 	switch c.Engine.KVDtype {
 	case "auto", "fp8":
 	default:
-		return fmt.Errorf("engine.kv_dtype must be \"auto\" or \"fp8\" (fp8 is refused by the QSA layers — keep auto unless experimenting)")
+		return fmt.Errorf("engine.kv_dtype must be \"auto\" or \"fp8\" (fp8 needs a `qfn build --b12x` image — the QSA bridge is build-gated; bench quality before serving)")
 	}
 	if c.Engine.Workers < 1 || c.Engine.Workers > 128 {
 		return fmt.Errorf("engine.workers must be 1..128")
+	}
+	if c.Engine.ReadAhead < 0 {
+		return fmt.Errorf("engine.ple_readahead must be >= 0 (0 = off; 2048 = upstream Spark-tuned)")
 	}
 	if err := validBind("engine.bind", c.Engine.Bind); err != nil {
 		return err
@@ -73,6 +86,40 @@ func validBind(field, bind string) error {
 	}
 	if ip := net.ParseIP(bind); ip == nil {
 		return fmt.Errorf("%s must be an IP (e.g. 127.0.0.1, 0.0.0.0) or \"localhost\", got %q", field, bind)
+	}
+	return nil
+}
+
+// validAdaptive checks the "3:1-4,1:5-16" draft policy grammar: one or more
+// comma-separated tokens:<lo>-<hi> ranges, lo<=hi, tokens 1..4, ranges strictly
+// ascending and non-overlapping (vLLM's num_speculative_tokens_per_batch_size).
+func validAdaptive(s string) error {
+	var prevHi int
+	for _, part := range strings.Split(s, ",") {
+		tok, rng, ok := strings.Cut(strings.TrimSpace(part), ":")
+		if !ok {
+			return fmt.Errorf("missing ':' in %q", part)
+		}
+		t, err := strconv.Atoi(strings.TrimSpace(tok))
+		if err != nil || t < 1 || t > 4 {
+			return fmt.Errorf("draft tokens must be 1..4 in %q", part)
+		}
+		loS, hiS, ok := strings.Cut(strings.TrimSpace(rng), "-")
+		if !ok {
+			return fmt.Errorf("batch range must look like 1-4 in %q", part)
+		}
+		lo, err := strconv.Atoi(strings.TrimSpace(loS))
+		if err != nil || lo < 1 {
+			return fmt.Errorf("bad range low in %q", part)
+		}
+		hi, err := strconv.Atoi(strings.TrimSpace(hiS))
+		if err != nil || hi < lo {
+			return fmt.Errorf("bad range high in %q", part)
+		}
+		if lo <= prevHi {
+			return fmt.Errorf("ranges must ascend without overlap (after %d)", prevHi)
+		}
+		prevHi = hi
 	}
 	return nil
 }

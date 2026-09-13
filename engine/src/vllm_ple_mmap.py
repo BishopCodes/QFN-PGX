@@ -10,7 +10,10 @@ llama.cpp does with its GGUF mmap.
 How: with VLLM_PLE_MMAP=1 this module patches ``Qwen3_8FlashNextNGramEmbedding``:
   * ``__init__`` swaps the 44/95 GiB ``VocabParallelEmbedding`` for a tiny
     placeholder whose ``forward(ids)`` gathers rows from ``np.memmap`` views of the
-    checkpoint's ``model-plefp8-*.safetensors`` shards (zero-copy, page-cache backed);
+    checkpoint's PLE shard tensors (zero-copy, page-cache backed). Shard files are
+    resolved by TENSOR NAME through ``model.safetensors.index.json``, so both the
+    RadixArk layout (``model-plefp8-*.safetensors``) and the NVIDIA official layout
+    (one ``model-fp8-mtp-ple.safetensors`` shared with the MTP weights) work;
   * ``load_weights`` drops the 128 shard tensors on the floor, keeps the global FP8
     ``weight_scale`` (as ``_offload_weight_scale``, which the untouched
     ``Qwen3_8FlashNextPLELayer._dequantize_embeddings`` already consumes) and opens
@@ -37,6 +40,12 @@ Knobs (env):
   VLLM_PLE_MMAP_PREWARM=0    1 = stream the whole table once at load to fill the
                              page cache with whatever memory is free (harmless,
                              evictable; ~10 s at 4.7 GB/s)
+  VLLM_PLE_MMAP_READAHEAD=0  >0 = per-step posix_fadvise(WILLNEED) hints for the
+                             gathered rows, coalesced into runs; a step whose runs
+                             exceed this limit is skipped (no hints). Purely I/O —
+                             numerically inert. Mechanism and Spark tuning
+                             (+8-11% C1 decode) from tpurtell's PR #54129 port;
+                             2048 is their selected default.
 
 Install: the Dockerfile copies this file next to vllm and appends
 ``_ple_mmap_apply(Qwen3_8FlashNextNGramEmbedding)`` to the end of
@@ -134,6 +143,41 @@ class MmapPleTable:
             self.rows_total += rows
         self.pool = ThreadPoolExecutor(max_workers=max(1, int(workers)))
         self.fast_rows = _env_int("VLLM_PLE_MMAP_FAST_ROWS", 512)
+        # 0 = off. >0 = max coalesced byte-ranges hinted per step (see module
+        # docstring); steps whose rows coalesce into more ranges than this are
+        # left to demand paging (tpurtell's PR #54129 rule, Spark-tuned 2048).
+        self.readahead_limit = _env_int("VLLM_PLE_MMAP_READAHEAD", 0)
+        self._fds: dict[int, int] = {}
+
+    def _fd(self, si: int) -> int:
+        fd = self._fds.get(si)
+        if fd is None:
+            fd = os.open(self.paths[si], os.O_RDONLY)
+            self._fds[si] = fd
+        return fd
+
+    def _readahead(self, uniq: np.ndarray, shard: np.ndarray, local: np.ndarray) -> None:
+        """Hint this step's byte ranges before the gather (async kernel-side I/O,
+        no blocking, numerically inert). Consecutive rows coalesce into one range
+        per run; ranges crossing a shard boundary split at the boundary. A step
+        whose runs exceed readahead_limit is skipped entirely."""
+        if self.readahead_limit <= 0 or uniq.size == 0:
+            return
+        try:
+            breaks = np.flatnonzero((np.diff(uniq) != 1) | (np.diff(shard) != 0)) + 1
+            starts = np.concatenate(([0], breaks))
+            if starts.size > self.readahead_limit:
+                return
+            ends = np.concatenate((breaks, [uniq.size]))
+            for s, e in zip(starts.tolist(), ends.tolist()):
+                mm = self.mm[int(shard[s])]
+                off = mm.offset + int(local[s]) * self.row_bytes
+                os.posix_fadvise(
+                    self._fd(int(shard[s])), off, (e - s) * self.row_bytes,
+                    os.POSIX_FADV_WILLNEED,
+                )
+        except (OSError, ValueError):
+            pass  # hints are advisory — never break or slow the gather for them
 
     def gather(self, ids: np.ndarray) -> np.ndarray:
         """ids: int64 [N] global row ids -> uint8 [N, row_bytes] (a fresh array)."""
@@ -161,6 +205,10 @@ class MmapPleTable:
                 )
             shard = ids // self.shard_size
             local = ids - shard * self.shard_size
+            if self.readahead_limit > 0:
+                u = np.unique(ids)
+                su = u // self.shard_size
+                self._readahead(u, su, u - su * self.shard_size)
             out = np.empty((ids.size, self.row_bytes), dtype=np.uint8)
             for si in np.unique(shard):
                 mask = shard == si
@@ -176,6 +224,7 @@ class MmapPleTable:
             )
         shard = uniq // self.shard_size
         local = uniq - shard * self.shard_size
+        self._readahead(uniq, shard, local)
         out = np.empty((uniq.size, self.row_bytes), dtype=np.uint8)
 
         bounds = np.flatnonzero(np.diff(shard)) + 1

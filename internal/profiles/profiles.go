@@ -30,11 +30,14 @@ type Profile struct {
 	Ctx          *int     `toml:"ctx,omitempty"`
 	Yarn         *bool    `toml:"yarn,omitempty"`
 	MTP          *int     `toml:"mtp,omitempty"`
+	MTPAdaptive  *string  `toml:"mtp_adaptive,omitempty"`
 	Seqs         *int     `toml:"seqs,omitempty"`
 	GpuMem       *float64 `toml:"gpu_mem,omitempty"`
 	KVDtype      *string  `toml:"kv_dtype,omitempty"`
 	Prewarm      *bool    `toml:"prewarm,omitempty"`
 	Workers      *int     `toml:"workers,omitempty"`
+	ReadAhead    *int     `toml:"ple_readahead,omitempty"`
+	HostEmbed    *bool    `toml:"host_embeddings,omitempty"`
 	CPUSet       *string  `toml:"cpuset,omitempty"`
 	Extra        *string  `toml:"extra,omitempty"`
 	Port         *int     `toml:"port,omitempty"`
@@ -58,11 +61,14 @@ func (p *Profile) Apply(e *config.Engine) {
 	seti(&e.Ctx, p.Ctx)
 	setb(&e.Yarn, p.Yarn)
 	seti(&e.MTP, p.MTP)
+	set(&e.MTPAdaptive, p.MTPAdaptive)
 	seti(&e.Seqs, p.Seqs)
 	setf(&e.GpuMem, p.GpuMem)
 	set(&e.KVDtype, p.KVDtype)
 	setb(&e.Prewarm, p.Prewarm)
 	seti(&e.Workers, p.Workers)
+	seti(&e.ReadAhead, p.ReadAhead)
+	setb(&e.HostEmbed, p.HostEmbed)
 	set(&e.CPUSet, p.CPUSet)
 	set(&e.Extra, p.Extra)
 	seti(&e.Port, p.Port)
@@ -175,6 +181,8 @@ func FromEngine(name, desc string, e config.Engine) *Profile {
 	p.Yarn = &yn
 	mtp := e.MTP
 	p.MTP = &mtp
+	ma := e.MTPAdaptive
+	p.MTPAdaptive = &ma
 	seqs := e.Seqs
 	p.Seqs = &seqs
 	gm := e.GpuMem
@@ -185,6 +193,10 @@ func FromEngine(name, desc string, e config.Engine) *Profile {
 	p.Prewarm = &pw
 	wk := e.Workers
 	p.Workers = &wk
+	ra := e.ReadAhead
+	p.ReadAhead = &ra
+	he := e.HostEmbed
+	p.HostEmbed = &he
 	cs := e.CPUSet
 	p.CPUSet = &cs
 	ex := e.Extra
