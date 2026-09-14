@@ -424,10 +424,16 @@ func (s *Server) hEngineStatus(w http.ResponseWriter, r *http.Request) {
 	reachable := s.deps.Collector.Last() != nil && s.deps.Collector.Last().Engine.Reachable
 	if st.Running {
 		switch {
-		case reachable, engine.PastBootHorizon(st.StartedAt):
-			// serving (metrics answered) or long past any possible boot —
-			// do not replay the whole log to rediscover markers.
+		case reachable:
+			// /metrics answered: the engine is serving.
 			phase = "ready"
+		case engine.PastBootHorizon(st.StartedAt):
+			// Up longer than any plausible boot, and nothing has answered
+			// /metrics. That is not evidence of serving — and the log tail at
+			// this point holds only year-old markers, so replaying it proves
+			// nothing either. A container can host a dead engine without ever
+			// emitting a docker die event, so say the true thing: unreachable.
+			phase = "unreachable"
 		default:
 			bt := &engine.BootTracker{}
 			var buf strings.Builder

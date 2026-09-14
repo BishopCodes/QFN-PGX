@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -112,33 +113,98 @@ func TestLogBusSeedsReadyForLongRunning(t *testing.T) {
 	}
 }
 
-// Same correction on the pull side: /api/engine/status must not claim
-// "starting" for a long-running container just because the log replay found
-// no markers.
-func TestEngineStatusReadyPastHorizon(t *testing.T) {
+// Same correction on the pull side, in both directions. /api/engine/status
+// must not claim "starting" for a long-running container whose log replay found
+// no markers — but it must not claim "ready" either without evidence that
+// something is answering. A container can host a dead engine with no docker die
+// event, so "up for three hours" proves nothing about serving.
+func TestEngineStatusPastHorizonNeedsLiveness(t *testing.T) {
+	// No liveness evidence: honest gap, not "starting", not "ready".
+	phase, reachable := engineStatus(t, "")
+	if reachable {
+		t.Fatal("test setup: the engine must be unreachable here")
+	}
+	if phase == "starting" {
+		t.Fatal("a three-hour-old container must not read as still booting")
+	}
+	if phase == "ready" {
+		t.Fatal("nothing has answered /metrics — ready would be a guess")
+	}
+	if phase != "unreachable" {
+		t.Fatalf("phase %q, want the honest gap (unreachable)", phase)
+	}
+
+	// With liveness evidence the same container reads ready.
+	phase, reachable = engineStatus(t, "vllm:num_requests_running{model=\"x\"} 1\n")
+	if !reachable {
+		t.Fatalf("collector never reported the engine reachable (phase %q)", phase)
+	}
+	if phase != "ready" {
+		t.Fatalf("phase %q, want ready once /metrics answers", phase)
+	}
+}
+
+// engineStatus reads /api/engine/status once, optionally with a working
+// /metrics scrape behind the collector. Atomic: the collector's own goroutine
+// reads it while the test goroutine swaps it.
+type scrapeFn = func(context.Context, string, string) (string, error)
+
+var testScrape atomic.Pointer[scrapeFn]
+
+func setTestScrape(fn scrapeFn) {
+	if fn == nil {
+		testScrape.Store(nil)
+		return
+	}
+	testScrape.Store(&fn)
+}
+
+func engineStatus(t *testing.T, metrics string) (phase string, reachable bool) {
+	t.Helper()
+	prev := testScrape.Load()
+	setTestScrape(nil)
+	if metrics != "" {
+		setTestScrape(func(context.Context, string, string) (string, error) { return metrics, nil })
+	}
+	defer func() {
+		if prev == nil {
+			setTestScrape(nil)
+		} else {
+			testScrape.Store(prev)
+		}
+	}()
+
 	ts, _, dk, _ := newTestServer(t, nil)
 	dk.inspectOut = fmt.Sprintf("running|%s|0001-01-01T00:00:00Z|0",
 		time.Now().Add(-3*time.Hour).UTC().Format(time.RFC3339Nano))
 	login(t, ts)
-	req, _ := http.NewRequest("GET", ts.URL+"/api/engine/status", nil)
-	for _, c := range sessionCookies {
-		req.AddCookie(c)
+	get := func() (string, bool) {
+		req, _ := http.NewRequest("GET", ts.URL+"/api/engine/status", nil)
+		for _, c := range sessionCookies {
+			req.AddCookie(c)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, _ := io.ReadAll(resp.Body)
+		var got struct {
+			Phase     string `json:"phase"`
+			Reachable bool   `json:"reachable"`
+		}
+		if err := json.Unmarshal(body, &got); err != nil {
+			t.Fatalf("%s: %v", body, err)
+		}
+		return got.Phase, got.Reachable
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	var got struct {
-		Phase     string `json:"phase"`
-		Reachable bool   `json:"reachable"`
-	}
-	if err := json.Unmarshal(body, &got); err != nil {
-		t.Fatalf("%s: %v", body, err)
-	}
-	if got.Phase != "ready" {
-		t.Fatalf("phase %q, want ready (body %s)", got.Phase, body)
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		phase, reachable = get()
+		if metrics == "" || reachable || time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 
@@ -333,5 +399,73 @@ func TestConsoleRestartEndpoint(t *testing.T) {
 	}
 	if mode != "respawn" {
 		t.Fatalf("restart hook got %q", mode)
+	}
+}
+
+// The swallow budget must be armed the FIRST time a run is looked at, not the
+// first time it is past the boot horizon. Consequence of getting this wrong:
+// an engine that dies at minute 2 of a container run (the container lives on,
+// no docker die event) marks failed correctly for ten minutes — and then the
+// first attach after the horizon finds seedRun still zero, re-arms the budget,
+// and reads that run's own old traceback as a fresh one: dead engine, phase
+// ready, forever.
+//
+// Ten minutes cannot elapse inside a unit test, so this pins the invariant the
+// consequence rests on: inside the horizon, a live failure both marks failed
+// and spends the run's budget. Under the old placement the budget was never
+// armed here (seedRun stayed zero) and the late-attach re-arm was live.
+func TestLogBusBudgetArmedBeforeHorizon(t *testing.T) {
+	started := time.Now().Add(-2 * time.Minute) // inside the boot horizon
+	hold := make(chan struct{})
+	defer close(hold)
+	stats := make(chan Status, 64)
+	b := &logBus{
+		inspect: func(context.Context, string) (engine.ContainerState, error) {
+			return engine.ContainerState{Status: "running", Running: true, StartedAt: started}, nil
+		},
+		logs: func(ctx context.Context, _ string, w io.Writer) error {
+			fmt.Fprintln(w, "Traceback (most recent call last):")
+			select {
+			case <-ctx.Done():
+			case <-hold:
+			}
+			return nil
+		},
+		nameFn: func() string { return "eng" },
+		idle:   10 * time.Millisecond,
+		stChs:  map[chan Status]struct{}{stats: {}},
+		st:     Status{Phase: "down"},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
+	defer cancel()
+	b.run(ctx)
+
+	var got []string
+	for {
+		select {
+		case s := <-stats:
+			got = append(got, s.Phase)
+			continue
+		default:
+		}
+		break
+	}
+	failed := false
+	for _, p := range got {
+		if p == "failed" {
+			failed = true
+		}
+		if p == "ready" {
+			t.Fatalf("inside the boot horizon a traceback is live, never ready: %v", got)
+		}
+	}
+	if !failed {
+		t.Fatalf("the traceback must have marked the run failed: %v", got)
+	}
+	if !b.seedRun.Equal(started) {
+		t.Fatalf("the budget must already belong to this run, not be armed later: seedRun=%v want %v", b.seedRun, started)
+	}
+	if !b.seedSwallow {
+		t.Fatal("this run has shown its traceback: the budget must be spent, so no later attach can swallow one")
 	}
 }

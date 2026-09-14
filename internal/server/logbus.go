@@ -117,11 +117,16 @@ func (b *logBus) run(ctx context.Context) {
 		// live and flips the phase (a real death also shows up via
 		// inspect/pipe-close).
 		seeded := engine.PastBootHorizon(st.StartedAt)
+		// One budget per container RUN, armed the first time this run is looked
+		// at. It must not wait for the horizon to elapse: a run that already
+		// failed at minute 2 would otherwise meet a freshly-armed budget at
+		// minute 11 and read its own old traceback as a fresh one — dead engine,
+		// phase ready, forever.
+		if !b.seedRun.Equal(st.StartedAt) {
+			b.seedRun, b.seedSwallow = st.StartedAt, false
+		}
 		if seeded {
 			bt = engine.NewBootTrackerSeeded(engine.PhaseReady)
-			if b.seedRun != st.StartedAt {
-				b.seedRun, b.seedSwallow = st.StartedAt, false
-			}
 		}
 		pctx, cancel := context.WithCancel(ctx)
 		pr, pw := io.Pipe()
@@ -138,6 +143,10 @@ func (b *logBus) run(ctx context.Context) {
 			}
 			b.publish(line, bt, ph, det)
 			if ph == engine.PhaseFailed {
+				// This run has now shown a traceback, stale or live: the tail
+				// replayed at the next attach holds that same one, and it must
+				// not buy a second swallow later in the run.
+				b.seedSwallow = true
 				break
 			}
 		}

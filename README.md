@@ -33,6 +33,9 @@ hold the model (the GB10 memory trap, guarded), and profiles layer over
 **Web console (`:8799`)** — Tailwind-styled, push-only (one SSE multiplexer;
 zero polling), with vendored TanStack Charts for the perf graph. Engine panel
 shows live boot progress (phase · percent · ETA, parsed from the log stream);
+a container that is up but has nothing answering `/metrics` says `unreachable`,
+never `ready` — age is not evidence; the uptime clock reads the engine's own
+process start, so a core respawn resets it instead of inheriting the older one;
 one server-side `docker logs -f` pump fans out to every tab with a bounded
 replay, so reconnects neither re-flood the screen nor hammer docker — the log
 pane pauses following when you scroll up instead of yanking. Requests render

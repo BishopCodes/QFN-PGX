@@ -126,7 +126,7 @@ function paintSnapshot(snap) {
     ['running / waiting', (e.running ?? 0) + ' / ' + (e.waiting ?? 0)],
     ['uptime', e.uptime_s ? upDur(e.uptime_s) : '—'],
     ['console', m.serve_port ? ':' + m.serve_port : '—'],
-  ]) : `<div class="text-slate-500 text-xs py-1">${c ? (state.status?.phase === 'ready' ? 'engine is up but not answering /metrics' : 'engine is ' + (state.status?.phase || 'booting') + '…') : 'engine down — <span class=\"text-slate-400\">▶ start</span> when you want it back'}</div>`;
+  ]) : `<div class="text-slate-500 text-xs py-1">${c ? (state.status?.phase === 'unreachable' ? 'container is up, engine is not answering /metrics' : 'engine is ' + (state.status?.phase || 'booting') + '…') : 'engine down — <span class=\"text-slate-400\">▶ start</span> when you want it back'}</div>`;
 
   // perf numbers + chart feed
   $('kv-gen').textContent = fmtNum(e.gen_tok_per_s, 1);

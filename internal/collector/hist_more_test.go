@@ -77,6 +77,9 @@ func TestEngineUptimeFromProcessStart(t *testing.T) {
 			"process_start_time_seconds{process_name=\"api\"} %d\n",
 			scrape.Add(-2*time.Hour).Unix(), scrape.Add(-2*time.Hour-30*time.Second).Unix()), 7200},
 		{"epoch-zero start is not an uptime", "process_start_time_seconds 0\n", 0},
+		// 1970-01-12: a relative counter wearing a gauge's clothes. Without a
+		// plausible-year floor this reads as ~56 years of uptime.
+		{"pre-2001 start is not an uptime", "process_start_time_seconds 1000000\n", 0},
 		{"future start is not an uptime", fmt.Sprintf("process_start_time_seconds %d\n",
 			scrape.Add(1*time.Hour).Unix()), 0},
 	} {

@@ -72,15 +72,25 @@ func newTestServer(t *testing.T, preflightErr error) (*httptest.Server, *auth.St
 	cfg.Meta.FirstRunDone = true
 
 	col := collector.New(collector.Config{
-		EngineBase: func() string { return "" },
-		EngineKey:  func() string { return "" },
+		EngineBase: func() string {
+			if testScrape.Load() != nil { // status test: give the collector an engine to ask
+				return "http://engine.test:9999"
+			}
+			return ""
+		},
+		EngineKey:   func() string { return "" },
 		HFCacheHost: t.TempDir(),
-		Interval:   50 * time.Millisecond,
+		Interval:    50 * time.Millisecond,
 	}, collector.IO{
 		ReadFile:   func(string) ([]byte, error) { return nil, errors.New("off") },
 		StatFreeKB: func(string) (uint64, bool) { return 1, true },
 		GPU:        func(context.Context) collector.GPU { return collector.GPU{} },
-		Scrape:     func(context.Context, string, string) (string, error) { return "", errors.New("off") },
+		Scrape: func(ctx context.Context, url, key string) (string, error) {
+			if fn := testScrape.Load(); fn != nil {
+				return (*fn)(ctx, url, key)
+			}
+			return "", errors.New("off")
+		},
 		ContainerID: func(context.Context) (string, error) { return "", nil },
 	})
 	go col.Run(context.Background())

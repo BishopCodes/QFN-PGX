@@ -68,6 +68,12 @@ func TestVisionCheckClassification(t *testing.T) {
 		{"limit zero", VisionDeps{SnapshotHasVision: true, SnapshotReadable: true,
 			Args: []string{"--limit-mm-per-prompt", `{"image": 0}`},
 			Post: fakePost(400, `At most 0 image(s) as input`, nil)}, "bad", "engine.images", "hint"},
+		// And it outranks the checkpoint: "no vision_config" would point at a
+		// pull, while the real cause is one line in config.toml.
+		{"limit zero outranks the checkpoint", VisionDeps{SnapshotHasVision: false, SnapshotReadable: true,
+			Args: []string{"--limit-mm-per-prompt", `{"image": 0}`}}, "bad", "engine.images", "hint"},
+		{"limit zero with an unknown checkpoint", VisionDeps{SnapshotHasVision: false, SnapshotReadable: false,
+			Args: []string{"--limit-mm-per-prompt", `{"image": 0}`}}, "bad", "engine.images", "hint"},
 		{"modality refused → snapshot mm files", VisionDeps{SnapshotHasVision: true, SnapshotReadable: true,
 			Args: []string{"--limit-mm-per-prompt", `{"image": 4}`},
 			Post: fakePost(400, `ValueError: model does not support modality 'image'`, nil)}, "bad", "processor_config.json", "hint"},
@@ -154,6 +160,7 @@ func TestVisionCheckRanksTheTwoCauses(t *testing.T) {
 	yes := func(ctx context.Context) ([]string, bool) { return []string{"text", "image"}, true }
 	no := func(ctx context.Context) ([]string, bool) { return []string{"text"}, true }
 	shrug := func(ctx context.Context) ([]string, bool) { return nil, false }
+	blank := func(ctx context.Context) ([]string, bool) { return []string{}, true }
 	refused := fakePost(400, `ValueError: model does not support modality 'image'`, nil)
 	trace := "2026-09-13 INFO serving.py:63 POST /v1/chat/completions\n"
 
@@ -169,6 +176,12 @@ func TestVisionCheckRanksTheTwoCauses(t *testing.T) {
 		{"registry wiring: published modalities exclude image", no, nil, false, "bad", "text-only", "hint"},
 		{"registry wiring named by arch, not by repo", no, nil, false, "bad", "qwen4_exp", "hint"},
 		{"modalities unknown: fall back to the files", shrug, nil, false, "bad", "processor_config.json", "hint"},
+		// "[]" names no modality at all: same silence as unknown, not a
+		// declaration of text-only, and no reason to blame the build.
+		{"modalities publish an empty list", blank, nil, false, "bad", "processor_config.json", "hint"},
+		// "[]" names no modality at all: same silence as unknown, not a
+		// declaration of text-only and not a reason to blame the build.
+		{"modalities publish an empty list", blank, nil, false, "bad", "processor_config.json", "hint"},
 		{"the port's missing manifest is the answer", yes, nil, false, "bad", "preprocessor_config.json without processor_config.json", "hint"},
 		{"complete checkpoint: the traceback is the answer", yes, quote(trace + "RuntimeError: Failed to load the processor"), true, "bad", "Failed to load the processor", "msg"},
 		{"the engine's own line is quoted", shrug, quote(trace + "ValueError: Qwen4ExpForConditionalGeneration is not a multimodal model"), false, "bad", "is not a multimodal model", "msg"},
@@ -263,6 +276,11 @@ func TestDeclaredModalitiesUnknownIsNotNoVision(t *testing.T) {
 		{"current field", `{"data":[{"id":"qwen38","supported_input_modalities":["text","image"]}]}`, []string{"text", "image"}, true},
 		{"legacy field", `{"data":[{"id":"qwen38","supported_modalities":["text"]}]}`, []string{"text"}, true},
 		{"older ModelCard, no field", `{"data":[{"id":"qwen38","object":"model"}]}`, nil, false},
+		// "[]" names no modality at all: silence, not a claim of text-only.
+		// Reading it as "declared, without image" would send the user off to
+		// rebuild vLLM on evidence that says nothing either way.
+		{"empty modality list", `{"data":[{"id":"qwen38","supported_input_modalities":[]}]}`, nil, false},
+		{"empty legacy list", `{"data":[{"id":"qwen38","supported_modalities":[]}]}`, nil, false},
 		{"not json", `<html>502</html>`, nil, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

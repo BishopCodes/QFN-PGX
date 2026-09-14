@@ -158,6 +158,19 @@ func VisionCheck(ctx context.Context, d VisionDeps) Check {
 	if len(ns) == 0 {
 		ns = []int{1}
 	}
+	// Launch flags before anything that costs money to check. A zero image
+	// limit means no prompt can carry an image part however good the
+	// checkpoint and the build are, and it is one config line to fix — while
+	// the checkpoint answer below costs a pull and the build answer a rebuild.
+	// (With the engine down there is no argv to read, so the checkpoint-side
+	// facts still get the floor: they stand on their own.)
+	if len(d.Args) > 0 {
+		if n, ok := mmLimit(d.Args); ok && n == 0 {
+			c.Status, c.Msg = "bad", "the running engine was launched with --limit-mm-per-prompt {\"image\": 0}: this lane is configured text-only"
+			c.Hint = "set engine.images in config.toml and `qfn restart` — until the container is relaunched the engine will refuse images, whatever the checkpoint or build does" + lookedIn(d.snapshotDir())
+			return c
+		}
+	}
 	if !d.SnapshotHasVision {
 		if !d.SnapshotReadable {
 			c.Status, c.Msg = "warn", "the checkpoint's config.json could not be read, so its vision posture is unknown (pulled yet?)"
@@ -168,20 +181,15 @@ func VisionCheck(ctx context.Context, d VisionDeps) Check {
 		c.Hint = "diff that file against the repo's own config.json — a partial pull is the usual cause, and unlike a missing manifest it is not fixable by copying one file in" + snapshotNote(d.snapshotDir(), d.Engine.Images)
 		return c
 	}
+	if len(d.Args) == 0 {
+		c.Status, c.Msg = "warn", "engine not running — start it (`qfn up`) and run doctor again"
+		return c
+	}
 	hasFlag := false
 	for _, a := range d.Args {
 		if strings.Contains(a, "limit-mm-per-prompt") {
 			hasFlag = true
 		}
-	}
-	if len(d.Args) == 0 {
-		c.Status, c.Msg = "warn", "engine not running — start it (`qfn up`) and run doctor again"
-		return c
-	}
-	if n, ok := mmLimit(d.Args); ok && n == 0 {
-		c.Status, c.Msg = "bad", "the running engine was launched with --limit-mm-per-prompt {\"image\": 0}: this lane is configured text-only"
-		c.Hint = "set engine.images in config.toml and `qfn restart` — until the container is relaunched the engine will refuse images, whatever the checkpoint or build does" + lookedIn(d.snapshotDir())
-		return c
 	}
 	if !hasFlag {
 		c.Status, c.Msg = "bad", "running engine was launched WITHOUT --limit-mm-per-prompt"
@@ -193,7 +201,10 @@ func VisionCheck(ctx context.Context, d VisionDeps) Check {
 	// wired this arch for images — a build fact, not a checkpoint fact.
 	declared := false
 	if d.Modalities != nil {
-		if mods, ok := d.Modalities(ctx); ok {
+		// An empty list is not a declaration of "text only", so it must not
+		// print as one ("takes  for this model") nor blame the build: it
+		// declares nothing, which is the same silence as ok=false.
+		if mods, ok := d.Modalities(ctx); ok && len(mods) > 0 {
 			if declared = modsImage(mods); !declared {
 				snapDir := d.snapshotDir()
 				c.Status, c.Msg = "bad", fmt.Sprintf("engine declares it takes %s for this model — no image modality", strings.Join(mods, "/"))
@@ -266,10 +277,13 @@ func DeclaredModalities(ctx context.Context, base, key string) (mods []string, o
 	}
 	// One model per lane: whichever entry publishes the field answers it.
 	for _, m := range out.Data {
-		if m.Input != nil {
+		// A declared-but-empty list is not a declaration of "text only": it
+		// names no modality at all, so it carries no evidence and must read
+		// as unknown — the probe below asks the engine outright instead.
+		if len(m.Input) > 0 {
 			return m.Input, true
 		}
-		if m.Legacy != nil {
+		if len(m.Legacy) > 0 {
 			return m.Legacy, true
 		}
 	}
