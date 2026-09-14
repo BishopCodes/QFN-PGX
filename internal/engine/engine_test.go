@@ -65,7 +65,8 @@ func TestDockerArgsMirrorsServeSh(t *testing.T) {
 		"--no-enable-flashinfer-autotune --kv-cache-dtype auto",
 		"--enable-auto-tool-choice --tool-call-parser qwen3_coder --reasoning-parser qwen3",
 		`--speculative-config {"method":"mtp","num_speculative_tokens":2}`,
-		"--api-key k", // lockdown delta, appended last
+		`--limit-mm-per-prompt {"image": 4}`, // image input is opt-in in vLLM's CLI contract
+		"--api-key k",                        // lockdown delta, appended last
 	} {
 		if !strings.Contains(enginePart, want) {
 			t.Errorf("engine argv missing %q", want)
@@ -80,6 +81,17 @@ func TestDockerArgsMirrorsServeSh(t *testing.T) {
 	// No hybrid env in nvfp4 mode.
 	if strings.Contains(joined, "VLLM_FP8_HYBRID") {
 		t.Error("nvfp4 mode must not carry hybrid env")
+	}
+}
+
+func TestDockerArgsImagesZero(t *testing.T) {
+	// images=0 is "text-only, on purpose" — it must still be declared (not
+	// dropped) so the accepted modalities stay visible in argv.
+	e := config.Defaults().Engine
+	e.Images = 0
+	args := defaultArgs(t, e, LaunchOpts{EngineAPIKey: "k", HFCacheHost: "/hf"})
+	if i := slices.Index(args, "--limit-mm-per-prompt"); i < 0 || args[i+1] != `{"image": 0}` {
+		t.Fatalf("images=0 must declare {\"image\": 0} in argv, got %v", args)
 	}
 }
 

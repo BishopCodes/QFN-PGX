@@ -256,3 +256,26 @@ func TestLockdownKeyInjected(t *testing.T) {
 		t.Fatalf("expected upstream 401 without key, got %d", rec2.Code)
 	}
 }
+
+func TestOversizedBodyIs413NotForwarded(t *testing.T) {
+	eng := newFakeEngine()
+	srv := httptest.NewServer(eng.handler())
+	defer srv.Close()
+	p, _ := newTestProxy(t, srv.URL, 0)
+	defer func(v int64) { maxReqBody = v }(maxReqBody)
+	maxReqBody = 64
+
+	req := httptest.NewRequest("POST", "/v1/chat/completions",
+		strings.NewReader(`{"model":"m","prompt":"`+strings.Repeat("a", 64)+`"}`))
+	rec := httptest.NewRecorder()
+	p.ServeHTTP(rec, req)
+	if rec.Code != http.StatusRequestEntityTooLarge ||
+		!strings.Contains(rec.Body.String(), "request_too_large") {
+		t.Fatalf("want 413 request_too_large, got %d %s", rec.Code, rec.Body.String())
+	}
+	eng.mu.Lock()
+	defer eng.mu.Unlock()
+	if eng.hits["chat"] != 0 {
+		t.Fatal("oversized body must never reach the engine")
+	}
+}

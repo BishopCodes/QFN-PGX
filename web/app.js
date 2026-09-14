@@ -124,9 +124,9 @@ function paintSnapshot(snap) {
     ['model', m.model_name || 'qwen3.8-flash-next'],
     ['mode', m.mode || '—'], ['context', m.ctx || '—'], ['MTP', m.mtp ?? '—'],
     ['running / waiting', (e.running ?? 0) + ' / ' + (e.waiting ?? 0)],
-    ['uptime', h.uptime_s ? upDur(h.uptime_s) : '—'],
+    ['uptime', e.uptime_s ? upDur(e.uptime_s) : '—'],
     ['console', m.serve_port ? ':' + m.serve_port : '—'],
-  ]) : `<div class="text-slate-500 text-xs py-1">${c ? 'engine is ' + (state.status?.phase || 'booting') + '…' : 'engine down — <span class=\"text-slate-400\">▶ start</span> when you want it back'}</div>`;
+  ]) : `<div class="text-slate-500 text-xs py-1">${c ? (state.status?.phase === 'ready' ? 'engine is up but not answering /metrics' : 'engine is ' + (state.status?.phase || 'booting') + '…') : 'engine down — <span class=\"text-slate-400\">▶ start</span> when you want it back'}</div>`;
 
   // perf numbers + chart feed
   $('kv-gen').textContent = fmtNum(e.gen_tok_per_s, 1);
@@ -409,7 +409,7 @@ const HELP = {
     <p>Restarts just the web server + proxy (NOT the model engine — generations keep running). The process exits and systemd relaunches it, so if you ran <code>sudo make install</code> with a newer build, this picks it up. CLI equivalent: <code>qfn serve restart</code>.</p>`,
   playground: `<h3 class="text-slate-200">Playground</h3>
     <p>Chat while trying settings live: <b>temperature</b> (0 = repeatable, 1 = varied), <b>top_p</b> (sampling cut), <b>max tokens</b> (length cap), <b>thinking budget</b> (how much reasoning the model may spend before answering: off/low/medium/high — more budget, more latency). Presets combine them; <b>engine defaults</b> sends none of the fields so the checkpoint's own defaults decide. Stats show what each combo cost: TTFT + tok/s.</p>
-    <p>Images: the engine lane must be launched with images allowed (engine.images in config.toml); the API speaks standard OpenAI/Anthropic multimodal shapes — test from the CLI with <code>qfn chat --image photo.jpg "what is this?"</code>.</p>`,
+    <p>Images: the engine lane must be launched with images allowed (engine.images in config.toml); the API speaks standard OpenAI/Anthropic multimodal shapes — test from the CLI with <code>qfn chat --image photo.jpg</code>, then type your question into the REPL.</p>`,
 };
 function openHelp(anchor) {
   $('help-body').innerHTML = anchor && HELP[anchor] ? HELP[anchor] : Object.values(HELP).join('<hr class="border-edge">');

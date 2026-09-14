@@ -81,14 +81,25 @@ func tracked(path string) bool {
 
 // ServeHTTP implements the front door. Auth is the *caller's* middleware;
 // the proxy assumes the request was authorized.
+// maxReqBody caps a request body (room for base64 image payloads). A var only
+// so the 413 path is testable without a 128 MiB fixture.
+var maxReqBody int64 = 128 << 20
+
 func (p *Proxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if p.target() == "" {
 		writeJSONError(w, http.StatusServiceUnavailable, "engine_unavailable", "no engine target configured (is anything running?)")
 		return
 	}
-	body, err := io.ReadAll(io.LimitReader(r.Body, 128<<20))
+	body, err := io.ReadAll(io.LimitReader(r.Body, maxReqBody+1))
 	if err != nil {
 		writeJSONError(w, http.StatusBadRequest, "invalid_request", "cannot read body")
+		return
+	}
+	if int64(len(body)) > maxReqBody {
+		// Truncating here would forward a clipped (or invalid) JSON body to the
+		// engine and blame it for the failure.
+		writeJSONError(w, http.StatusRequestEntityTooLarge, "request_too_large",
+			"request body exceeds the request limit")
 		return
 	}
 

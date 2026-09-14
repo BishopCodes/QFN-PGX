@@ -82,7 +82,7 @@ func addLifecycle(root *cobra.Command, app *App) {
 	root.AddCommand(up)
 
 	down := &cobra.Command{
-		Use:   "down", Short: "Stop and remove the engine container",
+		Use: "down", Short: "Stop and remove the engine container",
 		RunE: func(c *cobra.Command, _ []string) error {
 			if err := firstRunGuard(app); err != nil {
 				return err
@@ -93,7 +93,7 @@ func addLifecycle(root *cobra.Command, app *App) {
 	root.AddCommand(down)
 
 	restart := &cobra.Command{
-		Use:   "restart", Short: "down + up",
+		Use: "restart", Short: "down + up",
 		RunE: func(c *cobra.Command, _ []string) error {
 			if err := firstRunGuard(app); err != nil {
 				return err
@@ -107,7 +107,7 @@ func addLifecycle(root *cobra.Command, app *App) {
 	root.AddCommand(restart)
 
 	status := &cobra.Command{
-		Use:   "status", Short: "Engine + console + pool summary",
+		Use: "status", Short: "Engine + console + pool summary",
 		RunE: func(c *cobra.Command, _ []string) error {
 			watch, _ := c.Flags().GetBool("watch")
 			return runStatus(c.Context(), app, watch)
@@ -117,7 +117,7 @@ func addLifecycle(root *cobra.Command, app *App) {
 	root.AddCommand(status)
 
 	logs := &cobra.Command{
-		Use:   "logs", Short: "Engine container logs",
+		Use: "logs", Short: "Engine container logs",
 		RunE: func(c *cobra.Command, _ []string) error {
 			follow, _ := c.Flags().GetBool("follow")
 			tail, _ := c.Flags().GetInt("tail")
@@ -229,8 +229,40 @@ func runUp(ctx context.Context, app *App, uf *upFlags) error {
 	app.SaveLastUp(name, eng)
 	okf("container created — weights stream from NVMe; first responses in ~10 min")
 	dimf("watch boot:  qfn status -w    ·  logs: qfn logs -f")
+	if line, warn := visionLine(app.Locator(), eng); line != "" {
+		if warn {
+			warnf("vision:      %s", line)
+		} else {
+			dimf("vision:      %s", line)
+		}
+	}
 	dimf("console:    http://%s:%d", app.Cfg.Serve.Bind, app.Cfg.Serve.Port)
 	return nil
+}
+
+// visionLine reports what the configured snapshot can actually do with images,
+// so "my lane is text-only" is not discovered at the first failed
+// `chat --image`. Second return is true when this is a warning. Empty line
+// means nothing worth saying: a text-only lane, or a snapshot dir we cannot
+// resolve (checkpoint not pulled, or a locator that doesn't know the host
+// layout) — never guess "OK" from a directory we never read.
+func visionLine(loc engine.SnapshotLocator, eng config.Engine) (string, bool) {
+	if eng.Images == 0 {
+		return "", false
+	}
+	if dir := engine.SnapshotHostDir(loc, eng); dir != "" {
+		mm := doctor.SnapshotMMAt(dir)
+		switch {
+		case !mm.Config:
+			return fmt.Sprintf("no readable config.json in %s — checkpoint pulled? vision posture unknown", dir), true
+		case !mm.Tower:
+			return fmt.Sprintf("%s has no vision_config in %s — image input will fail unless this snapshot is vision-capable", eng.Model, dir), true
+		case !mm.Processor:
+			return fmt.Sprintf("%s ships no processor_config.json — image input will fail; serve the nvidia profile or copy that one file into %s", eng.Model, dir), true
+		}
+		return fmt.Sprintf("snapshot OK — %d images per prompt", eng.Images), false
+	}
+	return fmt.Sprintf("posture unknown (snapshot dir unresolved) — `qfn doctor --vision-matrix` after boot qualifies %d images/prompt", eng.Images), false
 }
 
 func displayName(n string) string {
@@ -250,8 +282,8 @@ func runStatus(ctx context.Context, app *App, watch bool) error {
 		} else {
 			fmt.Printf("  status:    %s", st.Status)
 			if st.Running {
-				// Boot phase from the log tail.
-				phase, detail := bootPhase(ctx, app)
+				// Boot phase from the log tail (or seeded when long up).
+				phase, detail := bootPhase(ctx, app, st.StartedAt)
 				fmt.Printf("  ·  boot: %s %s", phase, detail)
 			} else if st.ExitCode != 0 {
 				fmt.Printf(" (exit %d)", st.ExitCode)
@@ -302,7 +334,12 @@ func runStatus(ctx context.Context, app *App, watch bool) error {
 	}
 }
 
-func bootPhase(ctx context.Context, app *App) (string, string) {
+func bootPhase(ctx context.Context, app *App, startedAt time.Time) (string, string) {
+	if engine.PastBootHorizon(startedAt) {
+		// Long past any possible boot — its markers are long gone from the
+		// log tail; replaying it would (mis)report "created" forever.
+		return "ready", ""
+	}
 	c, cancel := context.WithTimeout(ctx, 800*time.Millisecond)
 	defer cancel()
 	pr, pw := io.Pipe()
@@ -363,11 +400,26 @@ func askLaunch(uf *upFlags) error {
 
 // ---- small typed setters honoring flag-set tracking ----
 
-func setStr(dst *string, v string, set bool)    { if set && v != "" { *dst = v } }
-func setInt(dst *int, v int, set bool)           { if set && v != 0 { *dst = v } }
-func setF64(dst *float64, v float64, set bool)   { if set && v != 0 { *dst = v } }
-func setBool(dst *bool, v bool, set bool)        { if set { *dst = v } }
-
+func setStr(dst *string, v string, set bool) {
+	if set && v != "" {
+		*dst = v
+	}
+}
+func setInt(dst *int, v int, set bool) {
+	if set && v != 0 {
+		*dst = v
+	}
+}
+func setF64(dst *float64, v float64, set bool) {
+	if set && v != 0 {
+		*dst = v
+	}
+}
+func setBool(dst *bool, v bool, set bool) {
+	if set {
+		*dst = v
+	}
+}
 
 // readMem is the tiny /proc/meminfo view status prints.
 type memSnap struct {

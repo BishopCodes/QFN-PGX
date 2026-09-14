@@ -421,22 +421,30 @@ func (s *Server) hEngineStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	phase := "starting"
 	detail := ""
+	reachable := s.deps.Collector.Last() != nil && s.deps.Collector.Last().Engine.Reachable
 	if st.Running {
-		bt := &engine.BootTracker{}
-		var buf strings.Builder
-		lctx, lcancel := context.WithTimeout(ctx, 700*time.Millisecond)
-		defer lcancel()
-		_ = s.deps.Manager.Logs(lctx, cfg.Engine.Name, &buf)
-		for _, line := range strings.Split(buf.String(), "\n") {
-			p, d := bt.Feed(line)
-			phase, detail = p.String(), d
-			if p == engine.PhaseReady {
-				break
+		switch {
+		case reachable, engine.PastBootHorizon(st.StartedAt):
+			// serving (metrics answered) or long past any possible boot —
+			// do not replay the whole log to rediscover markers.
+			phase = "ready"
+		default:
+			bt := &engine.BootTracker{}
+			var buf strings.Builder
+			lctx, lcancel := context.WithTimeout(ctx, 700*time.Millisecond)
+			defer lcancel()
+			_ = s.deps.Manager.Logs(lctx, cfg.Engine.Name, &buf)
+			for _, line := range strings.Split(buf.String(), "\n") {
+				p, d := bt.Feed(line)
+				phase, detail = p.String(), d
+				if p == engine.PhaseReady {
+					break
+				}
 			}
 		}
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"container": st, "phase": phase, "detail": detail,
-		"reachable": s.deps.Collector.Last() != nil && s.deps.Collector.Last().Engine.Reachable})
+		"reachable": reachable})
 }
 
 func (s *Server) hEngineLogs(w http.ResponseWriter, r *http.Request) {
@@ -477,10 +485,11 @@ func (s *Server) hEngineLogs(w http.ResponseWriter, r *http.Request) {
 // standalone we respawn detached first. Session auth required (auth wraps it).
 func (s *Server) hConsoleRestart(w http.ResponseWriter, r *http.Request) {
 	under := os.Getenv("INVOCATION_ID") != ""
+	restart := consoleRestart // read now: the goroutine below must not touch the var
 	writeJSON(w, http.StatusAccepted, map[string]any{"restart_in_ms": 400, "mode": restartMode(under)})
 	go func() {
 		time.Sleep(400 * time.Millisecond) // let the response flush
-		consoleRestart(under)
+		restart(under)
 	}()
 }
 

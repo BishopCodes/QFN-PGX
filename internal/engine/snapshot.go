@@ -73,6 +73,21 @@ func (p *pathLocator) SnapshotInContainer(e config.Engine) (string, []string, er
 	return snapIn, hybridEnv, nil
 }
 
+// SnapshotHostDir is the checkpoint's directory on THIS host, resolved through
+// the same locator that produces the in-container /hf path — the translation
+// lives here, beside the layout knowledge, not at each caller.
+func SnapshotHostDir(loc SnapshotLocator, e config.Engine) string {
+	snapIn, _, err := loc.SnapshotInContainer(e)
+	if err != nil {
+		return ""
+	}
+	pl, ok := loc.(*pathLocator)
+	if !ok {
+		return "" // a locator that doesn't know the host layout says so
+	}
+	return filepath.Join(pl.repoDir(e), "snapshots", filepath.Base(snapIn))
+}
+
 // Status is consumed by `qfn doctor`.
 type Status struct {
 	RepoExists     bool

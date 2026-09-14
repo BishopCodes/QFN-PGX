@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"golang.org/x/term"
@@ -68,7 +69,7 @@ func (s *Session) Send(ctx context.Context, text string, out io.Writer) (string,
 		content = []any{
 			map[string]any{"type": "text", "text": text},
 			map[string]any{"type": "image_url", "image_url": map[string]string{
-				"url": "data:image/png;base64," + base64.StdEncoding.EncodeToString(b)}},
+				"url": "data:" + http.DetectContentType(b) + ";base64," + base64.StdEncoding.EncodeToString(b)}},
 		}
 	}
 	s.messages = append(s.messages, map[string]any{"role": "user", "content": content})
@@ -97,8 +98,11 @@ func (s *Session) Send(ctx context.Context, text string, out io.Writer) (string,
 
 	// Pre-first-token silence on a cold prompt can run seconds — give the
 	// user evidence of life (and elapsed time) until real tokens arrive.
+	// Once-guarded: the first token closes this, and the deferred close would
+	// otherwise panic on "close of closed channel" after every good reply.
 	spinnerDone := make(chan struct{})
-	defer close(spinnerDone)
+	stopSpin := sync.OnceFunc(func() { close(spinnerDone) })
+	defer stopSpin()
 	if isTTY(out) {
 		go spin(out, spinnerDone, start)
 	}
@@ -146,7 +150,7 @@ func (s *Session) Send(ctx context.Context, text string, out io.Writer) (string,
 				select {
 				case <-spinnerDone:
 				default:
-					close(spinnerDone)
+					stopSpin()
 				} // stop spinner, clear line
 			}
 			tokens++

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,14 +20,34 @@ import (
 	"github.com/BishopCodes/qfn-pgx/internal/proxy"
 )
 
-type fakeDocker struct{ runs [][]string }
+// fakeDocker.Run is called from the engine-op goroutine while tests poll, so
+// `runs` is mutex-guarded and only handed out as a copy. (inspectOut is only
+// ever assigned before a request is made — the tests run with NoLogPump.)
+type fakeDocker struct {
+	mu         sync.Mutex
+	runs       [][]string
+	inspectOut string // when set, returned verbatim for `docker inspect`
+}
 
 func (f *fakeDocker) Run(ctx context.Context, args ...string) (string, error) {
+	f.mu.Lock()
 	f.runs = append(f.runs, args)
+	f.mu.Unlock()
 	if len(args) > 0 && args[0] == "inspect" {
+		if f.inspectOut != "" {
+			return f.inspectOut, nil
+		}
 		return "", errors.New("Error: No such object: qwen38-flash")
 	}
 	return "", nil
+}
+
+func (f *fakeDocker) called() [][]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	cp := make([][]string, len(f.runs))
+	copy(cp, f.runs)
+	return cp
 }
 func (f *fakeDocker) FollowLogs(ctx context.Context, name string, w io.Writer) error {
 	<-ctx.Done()
@@ -195,8 +216,8 @@ func TestEngineUpPreflightRefusal(t *testing.T) {
 	if !strings.Contains(resp.body, "memory guard") {
 		t.Fatalf("body %s", resp.body)
 	}
-	if len(dk.runs) != 0 {
-		t.Fatalf("preflight refusal must not touch docker: %v", dk.runs)
+	if len(dk.called()) != 0 {
+		t.Fatalf("preflight refusal must not touch docker: %v", dk.called())
 	}
 }
 
@@ -211,7 +232,7 @@ func TestEngineUpSuccess(t *testing.T) {
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
 		var ran bool
-		for _, a := range dk.runs {
+		for _, a := range dk.called() {
 			if len(a) > 0 && a[0] == "run" {
 				ran = true
 				joined := strings.Join(a, " ")
@@ -228,7 +249,7 @@ func TestEngineUpSuccess(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	t.Fatalf("docker run never issued: %v", dk.runs)
+	t.Fatalf("docker run never issued: %v", dk.called())
 }
 
 func TestBusyEngineOpGets409(t *testing.T) {

@@ -49,6 +49,33 @@ func (m Metrics) Gauge(name string) (float64, bool) {
 	return sum, found
 }
 
+// MaxGauge returns the LARGEST value across a family's series — for epoch-like
+// gauges (process_start_time_seconds), where summing the several worker series
+// would be meaningless: the engine has been serving since the LAST of them
+// started, and an earlier sibling's start would overstate it.
+func (m Metrics) MaxGauge(name string) (float64, bool) {
+	f, ok := m.Families[name]
+	if !ok {
+		return 0, false
+	}
+	best, found := 0.0, false
+	for _, mm := range f.GetMetric() {
+		v := 0.0
+		switch {
+		case mm.Gauge != nil:
+			v = mm.Gauge.GetValue()
+		case mm.Counter != nil:
+			v = mm.Counter.GetValue()
+		default:
+			continue
+		}
+		if !found || v > best {
+			best, found = v, true
+		}
+	}
+	return best, found
+}
+
 // histSnap stores a histogram family as sorted le-bounds with their
 // (cumulative, as-exposed) counts summed across series.
 type histSnap struct {
@@ -164,26 +191,120 @@ func interpolate(upperBounds, counts []float64, phi float64) float64 {
 	return upperBounds[len(upperBounds)-1]
 }
 
-// HistState keeps previous buckets so each window is computed once per scrape.
+// HistState keeps the recent history of a histogram family so quantiles can be
+// taken over a rolling window instead of "since the last scrape" — one scrape
+// is ~2 s of traffic on one lane, far too thin to average.
 type HistState struct {
-	prev map[string]histSnap
+	Horizon time.Duration       // window length; 0 = the default below
+	rings   map[string][]histAt // name → ascending-by-time snapshots
+	last    map[string]bool     // name → a previous scrape was recorded
 }
 
-// NewHistState returns an empty window state.
-func NewHistState() *HistState { return &HistState{prev: map[string]histSnap{}} }
+type histAt struct {
+	at   time.Time
+	full histSnap
+}
 
-// Quantile returns the φ-quantile over the window since the previous call for
-// this family and advances the stored snapshot. Returns (0,false) on the
-// first scrape (no window yet) or when the family is absent.
-func (hs *HistState) Quantile(m Metrics, name string, phi float64) (float64, bool) {
+// NewHistState returns a one-minute rolling window state.
+func NewHistState() *HistState {
+	return &HistState{Horizon: 60 * time.Second, rings: map[string][]histAt{}}
+}
+
+// Reset drops all windows (engine went down; a restart must not rebaseline
+// against stale pre-restart cumulatives).
+func (hs *HistState) Reset() {
+	hs.rings = map[string][]histAt{}
+	hs.last = map[string]bool{}
+}
+
+// Quantiles returns each requested φ-quantile over the rolling window — all φ
+// from the SAME window, which the old per-φ API could not promise: every call
+// advanced the stored snapshot, so asking for p50 then p90 measured p90 over an
+// empty window. Zeros when the family is absent or this is its first scrape.
+func (hs *HistState) Quantiles(m Metrics, name string, phis ...float64) []float64 {
+	out := make([]float64, len(phis))
 	cur, ok := m.histSnap(name)
 	if !ok {
-		return 0, false
+		return out
 	}
-	prev, hadPrev := hs.prev[name]
-	hs.prev[name] = cur
-	if !hadPrev {
-		return 0, false
+	horizon := hs.Horizon
+	if horizon <= 0 {
+		horizon = 60 * time.Second
 	}
-	return QuantileWindow(prev, cur, phi)
+	now := m.ScrapedAt
+	if now.IsZero() {
+		now = time.Now()
+	}
+	if hs.last == nil {
+		hs.last = map[string]bool{}
+	}
+	ring := hs.rings[name]
+	switch {
+	case !hs.last[name] || len(ring) == 0:
+		// First scrape for this family (or the first after a reset): start the
+		// ring here rather than hand back an all-zero window, which would blank
+		// the panel for a whole horizon after an engine restart.
+		ring = []histAt{{at: now, full: cur}}
+	case !ring[len(ring)-1].at.Before(now):
+		// Stale or repeated scrape: leave the ring alone, so a replay cannot
+		// wipe the newest entry or slide the window backwards.
+		hs.rings[name] = ring
+		if len(ring) < 2 {
+			return out
+		}
+		return quantilesFromRing(ring, now, horizon, phis)
+	default:
+		ring = append(ring, histAt{at: now, full: cur})
+	}
+	hs.rings[name] = pruneRing(ring, now, horizon)
+	hs.last[name] = true
+	if len(hs.rings[name]) < 2 {
+		return out
+	}
+	return quantilesFromRing(hs.rings[name], now, horizon, phis)
+}
+
+// quantilesFromRing diffs the window's two endpoints once and draws every φ
+// from that single window.
+func quantilesFromRing(ring []histAt, now time.Time, horizon time.Duration, phis []float64) []float64 {
+	out := make([]float64, len(phis))
+	cut := now.Add(-horizon)
+	start := 0
+	for i := range ring {
+		if !ring[i].at.Before(cut) {
+			start = i
+			break
+		}
+	}
+	if start > len(ring)-2 {
+		start = len(ring) - 2
+	}
+	for i, phi := range phis {
+		if v, ok := QuantileWindow(ring[start].full, ring[len(ring)-1].full, phi); ok {
+			out[i] = v
+		}
+	}
+	return out
+}
+
+// pruneRing keeps the horizon plus one entry outside it: measuring a full
+// horizon needs a sample at or before now−horizon, and keeping one outside
+// holds that boundary steady instead of snapping the window to now−(horizon+ε)
+// every time an entry falls off.
+func pruneRing(ring []histAt, now time.Time, horizon time.Duration) []histAt {
+	cut := now.Add(-horizon)
+	keep := 0
+	for i := range ring {
+		if !ring[i].at.Before(cut) {
+			keep = i
+			if i > 0 {
+				keep = i - 1
+			}
+			break
+		}
+	}
+	if keep > 0 {
+		ring = append([]histAt(nil), ring[keep:]...)
+	}
+	return ring
 }

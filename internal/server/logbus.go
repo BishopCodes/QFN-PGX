@@ -49,6 +49,7 @@ type logBus struct {
 	inspect func(ctx context.Context, name string) (engine.ContainerState, error)
 	logs    func(ctx context.Context, name string, w io.Writer) error
 	nameFn  func() string
+	idle    time.Duration // re-attach delay after a log stream ends (0 = pumpIdle)
 
 	once sync.Once
 
@@ -57,6 +58,13 @@ type logBus struct {
 	subs  map[chan string]struct{}
 	st    Status
 	stChs map[chan Status]struct{}
+
+	// Boot-tail memory, pump goroutine only: the fail-marker swallow budget
+	// belongs to a container RUN (keyed on its StartedAt), not to a log-stream
+	// attach — otherwise every re-attach replays the same stale traceback and a
+	// dead engine flaps back to "ready".
+	seedRun     time.Time
+	seedSwallow bool
 }
 
 func newLogBus(m *engine.Manager, nameFn func() string) *logBus {
@@ -82,6 +90,10 @@ func (b *logBus) run(ctx context.Context) {
 	// 2 s inspect poll; a 30 s inspect is only a watchdog against missed
 	// events. While up, the log pipe itself signals death — no polling.
 	trans := b.watchLifecycle(ctx)
+	idle := b.idle
+	if idle == 0 {
+		idle = pumpIdle
+	}
 	for ctx.Err() == nil {
 		name := b.nameFn()
 		st, err := b.inspect(ctx, name)
@@ -94,6 +106,23 @@ func (b *logBus) run(ctx context.Context) {
 			continue
 		}
 		bt := &engine.BootTracker{}
+		// A container up far longer than any plausible boot has already streamed
+		// its markers past the log tail — seed "ready". The tail it replays
+		// (docker logs --tail 200) can still hold ONE traceback from a previous
+		// life of the container, so the first fail marker of a run is swallowed;
+		// that budget is spent for the whole run, across log-stream re-attaches,
+		// and only a fresh container run resets it. Swallowing more would be a
+		// licence to call anything "ready" — a container can host a dead engine
+		// without ever emitting a docker die event, so a second traceback stays
+		// live and flips the phase (a real death also shows up via
+		// inspect/pipe-close).
+		seeded := engine.PastBootHorizon(st.StartedAt)
+		if seeded {
+			bt = engine.NewBootTrackerSeeded(engine.PhaseReady)
+			if b.seedRun != st.StartedAt {
+				b.seedRun, b.seedSwallow = st.StartedAt, false
+			}
+		}
 		pctx, cancel := context.WithCancel(ctx)
 		pr, pw := io.Pipe()
 		go func() { _ = b.logs(pctx, name, pw); _ = pw.Close() }()
@@ -102,6 +131,11 @@ func (b *logBus) run(ctx context.Context) {
 		for sc.Scan() {
 			line := ansiRE.ReplaceAllString(sc.Text(), "")
 			ph, det := bt.Feed(line)
+			if seeded && ph == engine.PhaseFailed && !b.seedSwallow {
+				b.seedSwallow = true
+				bt = engine.NewBootTrackerSeeded(engine.PhaseReady)
+				ph, det = engine.PhaseReady, ""
+			}
 			b.publish(line, bt, ph, det)
 			if ph == engine.PhaseFailed {
 				break
@@ -111,7 +145,7 @@ func (b *logBus) run(ctx context.Context) {
 		if ctx.Err() != nil {
 			return
 		}
-		if !waitEvent(ctx, trans, pumpIdle) {
+		if !waitEvent(ctx, trans, idle) {
 			return
 		}
 	}

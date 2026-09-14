@@ -92,7 +92,7 @@ tracked, `uninstall --list` before anything is removed).
 
 | snapshot | size | notes |
 |---|---|---|
-| `RadixArk/Qwen3.8-Flash-Next-NVFP4` (default) | ~122 GiB | the port this lane was tuned against; per-layer expert shards + `model-plefp8-*`; **no `processor_config.json`** (vision probes may need it copied in) |
+| `RadixArk/Qwen3.8-Flash-Next-NVFP4` (default) | ~122 GiB | the port this lane was tuned against; per-layer expert shards + `model-plefp8-*`; ships `preprocessor_config.json` but **no `processor_config.json`** (see the vision note below) |
 | `nvidia/Qwen3.8-Flash-Next-NVFP4` | ~129 GiB | NVIDIA's official release: MSE-calibrated scales, FP8 PLE table and FP8-block MTP experts in one `model-fp8-mtp-ple` shard; ships `processor_config.json` |
 
 Both load unmodified on this engine image: the Dockerfile ports upstream's
@@ -107,6 +107,32 @@ model = "nvidia/Qwen3.8-Flash-Next-NVFP4"
 ```
 
 Disk guard and `qfn pull`'s free-space hint are model-aware (138 GiB vs 130).
+
+Both declare the same architecture (`Qwen4ExpForConditionalGeneration` /
+`qwen4_exp`) and both carry the vision tower, so "vision is not supported by
+this model" is not fixed by swapping repos. `qfn doctor --vision` ranks the real
+causes from the engine's own words.
+
+Check the launch flags before blaming anything: `engine.images` decides how many
+images a request may carry, and at 0 the container is launched with
+`--limit-mm-per-prompt {"image": 0}` — every prompt is text-only no matter what
+the checkpoint holds. Set it to 1+ in the profile and restart.
+
+The checkpoint-side cause is one missing manifest. vLLM builds a processor only
+when it finds `processor_config.json`, and the RadixArk export ships
+`preprocessor_config.json` without it — so the tower is on disk but unreachable.
+Fetch the missing file from the NVIDIA release:
+
+```bash
+curl -L https://huggingface.co/nvidia/Qwen3.8-Flash-Next-NVFP4/resolve/main/processor_config.json \
+  -o ~/.cache/huggingface/hub/models--RadixArk--Qwen3.8-Flash-Next-NVFP4/snapshots/<rev>/processor_config.json
+```
+
+Doctor reports which of these it can actually prove. If it can't read a
+`config.json` for the slot (not pulled yet, or overridden `engine.model`), it
+says so instead of calling the model text-only; and it only blames the build
+when `/v1/models` really did publish `image` input — with no modality list in
+hand, try the manifest above first, since it costs one file.
 
 ## Tuning knobs (off by default — each is a `qfn bench` A/B away from your default)
 

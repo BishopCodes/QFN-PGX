@@ -63,7 +63,8 @@ type EngineState struct {
 	ITLP50         float64  `json:"itl_p50"`  // seconds per token (1/itl = tok/s)
 	ITLP90         float64  `json:"itl_p90"`
 	E2EP50         float64  `json:"e2e_p50"`
-	TTFTSamples    int      `json:"ttft_samples"` // window bucket total (0 = idle)
+	UptimeS        float64  `json:"uptime_s"`  // engine process age (seconds)
+	TTFTSamples    int      `json:"ttft_samples"` // lifetime bucket total
 	Spec           SpecStats `json:"spec"`        // MTP speculative decoding
 }
 
@@ -362,8 +363,17 @@ func (c *Collector) SampleOnce(ctx context.Context) Snapshot {
 			}
 		} else {
 			c.metFail++
-			// engine down/loading: reset windows so rates restart clean
+			// engine down/loading: reset rates so they restart clean. The
+			// histogram window survives a single blip — it now spans up to a
+			// minute, so wiping it on one dropped scrape would blank TTFT/ITL
+			// for that whole horizon. Only the sustained outage (the same
+			// 3-sample threshold that slows the scrape) rebaselines it; a
+			// counter restart in between is handled by QuantileWindow's
+			// per-bucket rebaseline.
 			c.prevEng = engPrev{}
+			if c.metFail >= 3 {
+				c.hist.Reset()
+			}
 			snap.Engine.Reachable = false
 		}
 		}
@@ -415,22 +425,23 @@ func (c *Collector) fillEngine(snap *Snapshot, m Metrics, dt float64) {
 		}
 	}
 	c.prevEng = engPrev{prompt, generation, pq, ph, sAcc, sDrT, sDr, true, true}
-	if q, ok := c.hist.Quantile(m, "vllm:time_to_first_token_seconds", 0.5); ok {
-		e.TTFTP50 = q
+	// One window per family per scrape; all φ drawn from the same pair.
+	q := c.hist.Quantiles(m, "vllm:time_to_first_token_seconds", 0.5, 0.9)
+	e.TTFTP50, e.TTFTP90 = q[0], q[1]
+	q = c.hist.Quantiles(m, "vllm:inter_token_latency_seconds", 0.5, 0.9)
+	e.ITLP50, e.ITLP90 = q[0], q[1]
+	e.E2EP50 = c.hist.Quantiles(m, "vllm:e2e_request_latency_seconds", 0.5)[0]
+	// Engine uptime from the engine's own report: the clock resets when an
+	// engine process restarts, even across a server restart. The YOUNGEST
+	// process wins (engine core and API server are separate processes): nothing
+	// served requests before the last of them existed, so a core respawn inside
+	// a live container resets the clock instead of inheriting the older start.
+	if st, ok := m.MaxGauge("process_start_time_seconds"); ok && st > 1e9 {
+		if up := m.ScrapedAt.Unix() - int64(st); up >= 0 {
+			e.UptimeS = float64(up)
+		}
 	}
-	if q, ok := c.hist.Quantile(m, "vllm:time_to_first_token_seconds", 0.9); ok {
-		e.TTFTP90 = q
-	}
-	if q, ok := c.hist.Quantile(m, "vllm:inter_token_latency_seconds", 0.5); ok {
-		e.ITLP50 = q
-	}
-	if q, ok := c.hist.Quantile(m, "vllm:inter_token_latency_seconds", 0.9); ok {
-		e.ITLP90 = q
-	}
-	if q, ok := c.hist.Quantile(m, "vllm:e2e_request_latency_seconds", 0.5); ok {
-		e.E2EP50 = q
-	}
-	if cur, ok := m.histSnap("vllm:time_to_first_token_seconds"); ok && len(cur.le) > 0 {
+	if cur, ok := m.histSnap("vllm:time_to_first_token_seconds"); ok && len(cur.count) > 0 {
 		e.TTFTSamples = int(cur.count[len(cur.count)-1])
 	}
 }

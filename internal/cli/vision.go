@@ -12,29 +12,48 @@ import (
 
 	"github.com/BishopCodes/qfn-pgx/internal/config"
 	"github.com/BishopCodes/qfn-pgx/internal/doctor"
+	"github.com/BishopCodes/qfn-pgx/internal/engine"
 )
 
 func (a *App) visionCheck(ctx context.Context, images []int) *doctor.Check {
-	hasVision := false
-	if snapIn, _, err := a.Locator().SnapshotInContainer(a.Cfg.Engine); err == nil {
-		host := filepath.Join(config.ExpandHome(a.Cfg.Paths.HFCache), strings.TrimPrefix(snapIn, "/hf"))
-		if b, err := os.ReadFile(filepath.Join(host, "config.json")); err == nil {
-			var m map[string]any
-			if json.Unmarshal(b, &m) == nil {
-				_, hasVision = m["vision_config"]
-			}
-		}
-	}
+	// One snapshot probe, shared with doctor: both facts come from the same
+	// locator every other check uses — including whether config.json was
+	// readable at all, which must never be reported as "no vision tower".
+	mm := doctor.SnapshotMMAt(engine.SnapshotHostDir(a.Locator(), a.Cfg.Engine))
 	ch := doctor.VisionCheck(ctx, doctor.VisionDeps{
 		Base:              func() string { return a.EngineBaseURL() },
 		Key:               func() string { return a.engineKeyOnly() },
-		Model:             a.Cfg.Engine.Model,
 		Args:              containerArgs(ctx, a),
-		SnapshotHasVision: hasVision,
+		Locator:           a.Locator(),
+		Engine:            a.Cfg.Engine,
+		SnapshotHasVision: mm.Tower,
+		SnapshotReadable:  mm.Config,
 		Images:            images,
 		Post:              doctor.HTTPPost,
+		// Both seams exist to answer "registry wiring or checkpoint files?"
+		// with the engine's own words instead of a guess: /v1/models for the
+		// declared modalities, the container log for the traceback the HTTP
+		// 400 never carries.
+		Modalities: func(ctx context.Context) ([]string, bool) {
+			cctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+			defer cancel()
+			return doctor.DeclaredModalities(cctx, a.EngineBaseURL(), a.engineKeyOnly())
+		},
+		Logs: func(ctx context.Context) string { return containerLogTail(ctx, a) },
 	})
 	return &ch
+}
+
+// containerLogTail is the engine's last words — where a Python traceback
+// names the class or processor that failed. `docker logs` merges the
+// container's stderr into stdout, so the traceback survives the seam; the
+// tail stays short because only the exception line matters.
+func containerLogTail(ctx context.Context, a *App) string {
+	out, err := a.Docker.Run(ctx, "logs", "--tail", "40", a.Cfg.Engine.Name)
+	if err != nil && out == "" {
+		return ""
+	}
+	return out
 }
 
 // containerArgs returns the running engine's argv (entrypoint args + cmd);

@@ -3,7 +3,23 @@ package engine
 import (
 	"regexp"
 	"strings"
+	"time"
 )
+
+// BootHorizon bounds the longest plausible cold boot on this lane (weights
+// via mmap + graph capture). A container running meaningfully longer than
+// this has booted — status readers may seed "ready" without log archaeology.
+const BootHorizon = 10 * time.Minute
+
+// PastBootHorizon reports whether a container has been up longer than any
+// plausible boot, so its markers have scrolled out of the log tail and readers
+// may seed "ready" without log archaeology. A zero StartedAt (docker inspect
+// parse failed — docker.go discards that error) is NOT past the horizon: we
+// cannot date the boot, so we must keep reading logs instead of declaring
+// success on a container that may still be loading weights.
+func PastBootHorizon(startedAt time.Time) bool {
+	return !startedAt.IsZero() && time.Since(startedAt) > BootHorizon
+}
 
 // Boot-phase parsing for `status -w` and the web console. A cold boot is
 // weights loading → graph capture → API server up, and the log lines below are
@@ -84,6 +100,12 @@ type BootTracker struct {
 	phase  Phase
 	detail string // e.g. "shards 8/19"
 }
+
+// NewBootTrackerSeeded returns a tracker pre-positioned at p — for attaching
+// to a container that booted long before we listened, whose markers have
+// scrolled out of the log tail. Without seeding such a session would report
+// "starting" forever on a fully-serving engine.
+func NewBootTrackerSeeded(p Phase) *BootTracker { return &BootTracker{phase: p} }
 
 // Feed consumes one log line and reports the (possibly new) phase.
 func (b *BootTracker) Feed(line string) (Phase, string) {

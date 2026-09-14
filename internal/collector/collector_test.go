@@ -141,16 +141,12 @@ func TestWindowQuantilesAndRates(t *testing.T) {
 	m1, _ := ParseMetricsText(vllmFixture1)
 	m2, _ := ParseMetricsText(vllmFixture2)
 	hs := NewHistState()
-	if _, ok := hs.Quantile(m1, "vllm:time_to_first_token_seconds", 0.5); ok {
+	if q := hs.Quantiles(m1, "vllm:time_to_first_token_seconds", 0.5); q[0] != 0 {
 		t.Fatal("first scrape has no window")
 	}
-	p50, ok := hs.Quantile(m2, "vllm:time_to_first_token_seconds", 0.5)
-	if !ok {
-		t.Fatal("no window quantile")
-	}
 	// window: 5 obs in (1, 2.5]; median = 1 + 1.5*(2.5-1)/5 = 1.75
-	if math.Abs(p50-1.75) > 1e-9 {
-		t.Fatalf("p50 %f, want 1.75", p50)
+	if q := hs.Quantiles(m2, "vllm:time_to_first_token_seconds", 0.5); math.Abs(q[0]-1.75) > 1e-9 {
+		t.Fatalf("p50 %f, want 1.75", q[0])
 	}
 }
 
@@ -227,12 +223,13 @@ func TestSampleOnceEndToEndWithFixtures(t *testing.T) {
 	if !(s2.Engine.PrefixHitRatio > 0.5) {
 		t.Fatalf("prefix ratio %f", s2.Engine.PrefixHitRatio)
 	}
-	if s2.Engine.TTFTP50 <= 1 && s2.Engine.TTFTP50 >= 0 {
-		// quantiles appear only from the third scrape (window between 2 and 3);
-		// on the second sample the hist window prev=m1 cur=m2 exists though:
+	// Both TTFT quantiles must be populated from the 1→2 window — p90 used
+	// to be structurally impossible (the 0.5 call consumed the window).
+	if s2.Engine.TTFTP50 <= 0 || s2.Engine.TTFTP90 <= 0 {
+		t.Fatalf("ttft quantiles missing on second sample: %+v", s2.Engine)
 	}
-	if s2.Engine.TTFTP50 <= 0 {
-		t.Log("ttft p50 not populated on second sample (hist state semantics) — acceptable")
+	if s2.Engine.TTFTP90 < s2.Engine.TTFTP50 {
+		t.Fatalf("p90 below p50: %+v", s2.Engine)
 	}
 }
 
