@@ -43,8 +43,8 @@
           <span id="boot-phase" class="text-warn">booting…</span>
           <span id="boot-eta" class="text-slate-500"></span>
         </div>
-        <div class="meter"><i id="boot-bar" style="width:3%; background:#f0b429"></i></div>
-        <div id="boot-detail" class="text-[11px] text-slate-500 mt-1 font-mono"></div>
+        <div class="meter"><i id="boot-bar" data-tone="warn" style="width:3%"></i></div>
+        <div id="boot-detail" class="text-2xs text-slate-500 mt-1 font-mono"></div>
       </div>
       <div class="flex flex-wrap gap-2 mb-3">
         <button id="btn-up" class="btn" data-help="engine-buttons">▶ start</button>
@@ -53,21 +53,21 @@
         <select id="profile" class="btn" style="width:auto" data-help="profiles" title="launch profile: a saved engine configuration"></select>
       </div>
       <dl id="model-body" class="min-w-0"></dl>
-      <div id="keys-line" class="text-[11px] text-slate-500 mt-2" data-help="keys"></div>
+      <div id="keys-line" class="text-2xs text-slate-500 mt-2" data-help="keys"></div>
     </section>
 
     <!-- PERFORMANCE -->
     <section class="panel col-span-12 lg:col-span-8 xl:col-span-5">
       <div class="ptitle">Performance <button class="help" data-help="perf">?</button></div>
       <div class="grid grid-cols-2 sm:grid-cols-5 gap-x-3 gap-y-1 mb-1">
-        <div><div class="text-slate-500 text-[11px]">generation</div><div class="font-mono text-lg text-good leading-tight"><span id="kv-gen">—</span> <span class="text-[10px] text-slate-600">tok/s</span></div></div>
-        <div><div class="text-slate-500 text-[11px]">avg speed <span class="text-slate-700">5m</span></div><div class="font-mono text-lg text-good leading-tight"><span id="kv-gen-avg">—</span> <span class="text-[10px] text-slate-600">tok/s</span></div></div>
-        <div><div class="text-slate-500 text-[11px]">prefill</div><div class="font-mono text-lg text-accent leading-tight"><span id="kv-prefill">—</span> <span class="text-[10px] text-slate-600">tok/s</span></div></div>
-        <div><div class="text-slate-500 text-[11px]">KV cache</div><div class="font-mono text-lg text-warn leading-tight"><span id="kv-usage">—</span> <span class="text-[10px] text-slate-600">%</span></div></div>
-        <div><div class="text-slate-500 text-[11px]">prefix cache hit</div><div class="font-mono text-lg text-slate-200 leading-tight"><span id="kv-prefix">—</span> <span class="text-[10px] text-slate-600">%</span></div></div>
+        <div><div class="text-slate-500 text-2xs">generation</div><div class="font-mono text-lg text-good leading-tight"><span id="kv-gen">—</span> <span class="text-2xs text-slate-600">tok/s</span></div></div>
+        <div><div class="text-slate-500 text-2xs">avg speed <span class="text-slate-600">5m</span></div><div class="font-mono text-lg text-good leading-tight"><span id="kv-gen-avg">—</span> <span class="text-2xs text-slate-600">tok/s</span></div></div>
+        <div><div class="text-slate-500 text-2xs">prefill</div><div class="font-mono text-lg text-accent leading-tight"><span id="kv-prefill">—</span> <span class="text-2xs text-slate-600">tok/s</span></div></div>
+        <div><div class="text-slate-500 text-2xs">KV cache</div><div class="font-mono text-lg text-warn leading-tight"><span id="kv-usage">—</span> <span class="text-2xs text-slate-600">%</span></div></div>
+        <div><div class="text-slate-500 text-2xs">prefix cache hit</div><div class="font-mono text-lg text-slate-200 leading-tight"><span id="kv-prefix">—</span> <span class="text-2xs text-slate-600">%</span></div></div>
       </div>
       <div id="chart-perf" data-help="chart"></div>
-      <div id="perf-extra" class="grid grid-cols-2 gap-x-4 mt-2 text-xs leading-[1.7]"></div>
+      <div id="perf-extra" class="grid grid-cols-2 gap-x-4 mt-2 text-xs leading-relaxed"></div>
     </section>
 
     <!-- SYSTEM -->
@@ -79,7 +79,7 @@
       </div>
       <div class="mb-2">
         <div class="flex justify-between text-xs mb-0.5"><span class="text-slate-500">swap</span><span id="swap-text" class="font-mono">— of —</span></div>
-        <div class="meter"><i id="bar-swap" style="background:#f0b429"></i></div>
+        <div class="meter"><i id="bar-swap" data-tone="warn"></i></div>
       </div>
       <div class="flex items-center gap-2 mb-2">
         <span class="text-slate-500 text-xs">cpu</span>
@@ -104,7 +104,7 @@
         <tbody id="req-table"></tbody>
       </table>
       </div>
-      <div class="text-[11px] text-slate-600 mt-1">click any row for per-request timing</div>
+      <div class="text-2xs text-slate-600 mt-1">click any row for per-request timing</div>
     </section>
 
     <!-- LOGS -->
@@ -113,7 +113,7 @@
         <button id="btn-follow" class="btn !py-0 mr-1" data-help="logs">following</button>
         <button class="help" data-help="logs">?</button>
       </div>
-      <pre id="logs" class="flex-1 min-h-[220px] max-h-[45vh] overflow-y-auto font-mono text-[11px] leading-relaxed text-slate-400 whitespace-pre-wrap break-all bg-ink/60 rounded p-2"></pre>
+      <pre id="logs" class="flex-1 min-h-[220px] max-h-[45vh] overflow-y-auto font-mono text-2xs leading-relaxed text-slate-400 whitespace-pre-wrap break-all bg-ink/60 rounded p-2"></pre>
       <button id="btn-jump" class="btn hidden self-end mt-1">jump to latest ↓</button>
     </section>
 
@@ -124,7 +124,7 @@
 <!-- PLAYGROUND DRAWER -->
 <aside id="pg-drawer" class="hidden fixed top-0 right-0 h-full w-full sm:w-[560px] z-40 bg-panel border-l border-edge shadow-[0_0_60px_#000a] flex flex-col">
   <div class="ptitle border-b border-edge !px-4 !py-2.5">Playground <button class="help" data-help="playground">?</button><span class="flex-1"></span>
-    <span class="text-[10px] text-slate-600 normal-case tracking-normal mr-2">chat with live settings</span>
+    <span class="text-2xs text-slate-600 normal-case tracking-normal mr-2">chat with live settings</span>
     <button id="btn-pg-close" class="btn !py-0">esc</button></div>
   <div class="flex-1 overflow-y-auto px-4 py-3 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-3 content-start">
         <div class="sm:col-span-2 flex flex-col gap-2 border-b border-edge pb-3">
@@ -169,7 +169,7 @@
           <textarea id="pg-msg" rows="3" placeholder="Ask the model anything… (Ctrl+Enter sends)"
             class="w-full bg-ink border border-edge rounded px-2 py-1.5 text-slate-200 focus:border-accent outline-none resize-y"></textarea>
           <pre id="pg-out" class="flex-1 min-h-[160px] max-h-[50vh] overflow-y-auto mt-2 bg-ink/60 rounded p-2 font-mono text-xs whitespace-pre-wrap break-words text-slate-300"></pre>
-          <div id="pg-stats" class="text-[11px] text-slate-500 mt-1 font-mono"></div>
+          <div id="pg-stats" class="text-2xs text-slate-500 mt-1 font-mono"></div>
         </div>
       </div>
 </aside>

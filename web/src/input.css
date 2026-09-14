@@ -5,11 +5,11 @@
 
 @layer components {
   .panel   { @apply bg-panel border border-edge rounded-lg p-4 min-w-0; }
-  .ptitle  { @apply text-[11px] uppercase tracking-widest text-slate-500 mb-2 flex items-center gap-1.5; }
+  .ptitle  { @apply text-2xs uppercase tracking-widest text-slate-500 mb-2 flex items-center gap-1.5; }
   .kv      { @apply flex justify-between py-0.5 min-w-0; }
   .kv b    { @apply font-normal text-slate-500 truncate; }
   .kv span { @apply font-mono text-slate-200 text-right ml-2 shrink-0; }
-  .btn     { @apply px-2.5 py-1 rounded border border-edge bg-panel hover:border-accent/60 hover:text-accent text-slate-300 text-xs transition-colors disabled:opacity-40 disabled:pointer-events-none; }
+  .btn     { @apply px-2.5 py-1 rounded border border-edge bg-panel hover:border-accent/60 hover:text-accent text-slate-300 text-xs transition-colors disabled:opacity-40 disabled:pointer-events-none focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent; }
   .btn-bad:hover  { @apply border-bad/70 hover:text-bad; }
   .pill    { @apply inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs border; }
   .pill-up   { @apply border-good/40 text-good; }
@@ -18,17 +18,19 @@
   .pill-bad  { @apply border-bad/50 text-bad; }
   .meter   { @apply h-2 rounded bg-edge overflow-hidden; }
   .meter > i { @apply block h-full bg-accent transition-[width] duration-700; }
-  .help    { @apply inline-flex items-center justify-center w-4 h-4 rounded-full border border-edge text-slate-500 text-[10px] leading-none hover:text-accent hover:border-accent cursor-help; }
+  .meter > i[data-tone="warn"] { @apply bg-warn; }
+  .meter > i[data-tone="bad"]  { @apply bg-bad; }
+  .help    { @apply inline-flex items-center justify-center w-4 h-4 rounded-full border border-edge text-slate-500 text-2xs leading-none hover:text-accent hover:border-accent cursor-help; }
 }
 
 /* TanStack Charts (SVG surface) theme hooks */
-svg text { fill: #64748b; font: 10px ui-monospace, monospace; }
-svg line, svg path.domain { stroke: #1e2939; }
+svg text { @apply fill-slate-500; font: 11px ui-monospace, monospace; }
+svg line, svg path.domain { @apply stroke-edge; }
 
 /* log pane */
 #logs { scrollbar-width: thin; scrollbar-color: #33415a transparent; }
-.log-err { color: #f16a6a; }
-.log-dim { color: #56637a; }
+.log-err { @apply text-bad; }
+.log-dim { @apply text-slate-600; }
 
 /* request rows */
 tr.req { cursor: pointer; }

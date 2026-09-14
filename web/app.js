@@ -149,10 +149,10 @@ function paintSnapshot(snap) {
     ['drafted', fmtNum(sp.drafted_per_s, 1) + ' tok/s'],
     ['mean / draft', fmtNum(sp.mean_accepted, 2) + ' tok'],
   ].map(([k, v]) => [`<span class="text-slate-500">${k}</span>`, v]))
-    : '<div class="text-[11px] text-slate-600">MTP counters idle — drafts show here once requests flow</div>';
+    : '<div class="text-2xs text-slate-600">MTP counters idle — drafts show here once requests flow</div>';
   $('perf-extra').innerHTML =
-    `<div><div class="text-[11px] uppercase tracking-widest text-slate-600 mb-1">latency</div>${timing}</div>` +
-    `<div><div class="text-[11px] uppercase tracking-widest text-slate-600 mb-1">speculative (MTP)</div>${specBlock}</div>`
+    `<div><div class="text-2xs uppercase tracking-widest text-slate-600 mb-1">latency</div>${timing}</div>` +
+    `<div><div class="text-2xs uppercase tracking-widest text-slate-600 mb-1">speculative (MTP)</div>${specBlock}</div>`
 
   state.hist.t.push(Date.now() / 1000);
   state.hist.gen.push(e.gen_tok_per_s ?? 0);
@@ -191,7 +191,7 @@ function paintSnapshot(snap) {
 function setBar(id, used, total) {
   const el = $(id), pct = total ? Math.min(100, (used / total) * 100) : 0;
   el.style.width = pct.toFixed(1) + '%';
-  el.style.background = pct > 92 ? '#f16a6a' : pct > 75 ? '#f0b429' : id === 'bar-swap' ? '#f0b429' : '#4cc2ff';
+  el.dataset.tone = pct > 92 ? 'bad' : (pct > 75 || id === 'bar-swap') ? 'warn' : 'ok';
 }
 
 function paintStatus(st) {
@@ -203,12 +203,13 @@ function paintStatus(st) {
     wrap.classList.remove('hidden');
     $('boot-phase').textContent = 'boot failed'; $('boot-phase').className = 'text-bad';
     $('boot-detail').textContent = st.fail_hint || 'check logs below';
-    $('boot-bar').style.width = (st.pct || 30) + '%'; $('boot-bar').style.background = '#f16a6a';
+    $('boot-bar').style.width = (st.pct || 30) + '%'; $('boot-bar').dataset.tone = 'bad';
     return;
   }
   if (booting) {
     $('boot-phase').textContent = st.phase + '…';
     $('boot-bar').style.width = Math.max(2, st.pct).toFixed(0) + '%';
+    $('boot-bar').dataset.tone = 'warn';
     $('boot-detail').textContent = st.detail || '';
     $('boot-eta').textContent = st.eta_s > 10 ? `~${Math.round(st.eta_s / 60) + 1} min left` : '';
   }
